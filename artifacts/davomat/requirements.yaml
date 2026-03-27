@@ -1,0 +1,18 @@
+packages:
+  "recharts": "Beautiful charts for the dashboard"
+  "date-fns": "Date formatting and manipulation"
+  "clsx": "Utility for constructing className strings conditionally"
+  "tailwind-merge": "Utility for merging tailwind classes"
+  "lucide-react": "Icons for the UI"
+  "react-hook-form": "Form state management"
+  "@hookform/resolvers": "Zod resolver for forms"
+  "zod": "Schema validation for forms"
+
+images:
+  - path: "artifacts/davomat/public/images/login-bg.png"
+    description: "Abstract minimal corporate background with soft blue and white geometric gradients, clean and professional"
+    aspect_ratio: "16:9"
+
+notes:
+  - "App assumes the generated hooks in @workspace/api-client-react handle credentials correctly for auth cookies."
+  - "PWA manifest is included, but full service worker registration would need to be added to main.tsx (not modified here)."

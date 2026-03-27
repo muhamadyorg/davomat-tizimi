@@ -1,0 +1,16 @@
+{
+  "name": "Davomat System",
+  "short_name": "Davomat",
+  "description": "Corporate Attendance Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}
