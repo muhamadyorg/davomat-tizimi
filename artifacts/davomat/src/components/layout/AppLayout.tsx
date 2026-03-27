@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
+import { useTheme } from "@/lib/theme";
 import { useLogout } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { 
@@ -14,7 +15,9 @@ import {
   LogOut,
   Menu,
   X,
-  Timer
+  Timer,
+  Sun,
+  Moon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,17 +30,18 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard, roles: ["superadmin", "admin", "employee"] },
-  { label: "Check In/Out", href: "/attendance/checkin", icon: Clock, roles: ["superadmin", "admin", "employee"] },
-  { label: "Attendance", href: "/attendance", icon: CalendarDays, roles: ["superadmin", "admin", "employee"] },
-  { label: "Employees", href: "/employees", icon: Users, roles: ["superadmin", "admin"] },
-  { label: "Departments", href: "/departments", icon: Building2, roles: ["superadmin"] },
-  { label: "Shifts", href: "/shifts", icon: Timer, roles: ["superadmin"] },
-  { label: "Leave Requests", href: "/leave", icon: CalendarDays, roles: ["superadmin", "admin", "employee"] },
-  { label: "Reports", href: "/reports", icon: FileBarChart, roles: ["superadmin", "admin", "employee"] },
+  { label: "Kelish/Ketish", href: "/attendance/checkin", icon: Clock, roles: ["superadmin", "admin", "employee"] },
+  { label: "Davomat", href: "/attendance", icon: CalendarDays, roles: ["superadmin", "admin", "employee"] },
+  { label: "Xodimlar", href: "/employees", icon: Users, roles: ["superadmin", "admin"] },
+  { label: "Bo'limlar", href: "/departments", icon: Building2, roles: ["superadmin"] },
+  { label: "Smenalar", href: "/shifts", icon: Timer, roles: ["superadmin"] },
+  { label: "Ta'til so'rovlari", href: "/leave", icon: CalendarDays, roles: ["superadmin", "admin", "employee"] },
+  { label: "Hisobotlar", href: "/reports", icon: FileBarChart, roles: ["superadmin", "admin", "employee"] },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const [location] = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const queryClient = useQueryClient();
@@ -55,11 +59,20 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   const SidebarContent = () => (
     <>
-      <div className="p-6 flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-lg shadow-primary/20 text-white font-bold text-xl">
-          D
+      <div className="p-6 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-lg shadow-primary/20 text-white font-bold text-xl">
+            D
+          </div>
+          <span className="text-xl font-bold tracking-tight text-foreground">Davomat</span>
         </div>
-        <span className="text-xl font-bold tracking-tight text-foreground">Davomat</span>
+        <button
+          onClick={toggleTheme}
+          title={theme === "dark" ? "Yorug' rejim" : "Qorong'u rejim"}
+          className="w-9 h-9 flex items-center justify-center rounded-xl bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground transition-all"
+        >
+          {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+        </button>
       </div>
 
       <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
@@ -100,13 +113,13 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               href="/profile"
               className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:bg-background hover:text-foreground transition-colors"
             >
-              <UserCircle className="w-4 h-4" /> Profile
+              <UserCircle className="w-4 h-4" /> Profil
             </Link>
             <button 
               onClick={handleLogout}
               className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-destructive/80 hover:bg-destructive/10 hover:text-destructive transition-colors"
             >
-              <LogOut className="w-4 h-4" /> Logout
+              <LogOut className="w-4 h-4" /> Chiqish
             </button>
           </div>
         </div>
@@ -124,12 +137,20 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
           <span className="font-bold text-foreground">Davomat</span>
         </div>
-        <button 
-          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-          className="p-2 rounded-lg bg-muted text-foreground"
-        >
-          {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleTheme}
+            className="w-9 h-9 flex items-center justify-center rounded-xl bg-muted text-muted-foreground hover:text-foreground transition-all"
+          >
+            {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+          <button 
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            className="p-2 rounded-lg bg-muted text-foreground"
+          >
+            {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
+        </div>
       </header>
 
       {/* Mobile Sidebar Overlay */}
