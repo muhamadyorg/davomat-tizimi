@@ -29,14 +29,14 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: "Dashboard", href: "/", icon: LayoutDashboard, roles: ["superadmin", "admin", "employee"] },
-  { label: "Kelish/Ketish", href: "/attendance/checkin", icon: Clock, roles: ["superadmin", "admin", "employee"] },
-  { label: "Davomat", href: "/attendance", icon: CalendarDays, roles: ["superadmin", "admin", "employee"] },
+  { label: "Dashboard", href: "/", icon: LayoutDashboard, roles: ["superadmin", "admin"] },
+  { label: "Davomat belgilash", href: "/attendance/checkin", icon: Clock, roles: ["superadmin", "admin"] },
+  { label: "Davomat tarixi", href: "/attendance", icon: CalendarDays, roles: ["superadmin", "admin"] },
   { label: "Xodimlar", href: "/employees", icon: Users, roles: ["superadmin", "admin"] },
   { label: "Bo'limlar", href: "/departments", icon: Building2, roles: ["superadmin"] },
   { label: "Smenalar", href: "/shifts", icon: Timer, roles: ["superadmin"] },
-  { label: "Ta'til so'rovlari", href: "/leave", icon: CalendarDays, roles: ["superadmin", "admin", "employee"] },
-  { label: "Hisobotlar", href: "/reports", icon: FileBarChart, roles: ["superadmin", "admin", "employee"] },
+  { label: "Ta'til so'rovlari", href: "/leave", icon: CalendarDays, roles: ["superadmin", "admin"] },
+  { label: "Hisobotlar", href: "/reports", icon: FileBarChart, roles: ["superadmin", "admin"] },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {

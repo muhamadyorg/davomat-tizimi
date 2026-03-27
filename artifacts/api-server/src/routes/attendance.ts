@@ -84,6 +84,109 @@ function calcEarlyLeave(checkOut: Date | null, shiftEnd: string, date: string): 
   return Math.max(0, diff);
 }
 
+// Admin: get all employees with their attendance for a given date
+router.get("/daily", requireRole("superadmin", "admin"), async (req: AuthRequest, res: Response) => {
+  const date = (req.query.date as string) || new Date().toISOString().split("T")[0];
+  const deptId = req.query.departmentId ? Number(req.query.departmentId) : undefined;
+
+  const conditions: any[] = [eq(usersTable.isActive, true)];
+  if (deptId) conditions.push(eq(usersTable.departmentId, deptId));
+
+  const employees = await db
+    .select({
+      id: usersTable.id,
+      firstName: usersTable.firstName,
+      lastName: usersTable.lastName,
+      departmentId: usersTable.departmentId,
+      departmentName: departmentsTable.name,
+      shiftId: usersTable.shiftId,
+      shiftName: shiftsTable.name,
+      shiftStartTime: shiftsTable.startTime,
+      shiftEndTime: shiftsTable.endTime,
+      position: usersTable.position,
+      role: usersTable.role,
+    })
+    .from(usersTable)
+    .leftJoin(departmentsTable, eq(usersTable.departmentId, departmentsTable.id))
+    .leftJoin(shiftsTable, eq(usersTable.shiftId, shiftsTable.id))
+    .where(and(...conditions));
+
+  const attendanceRecords = await db
+    .select()
+    .from(attendanceTable)
+    .where(eq(attendanceTable.date, date));
+
+  const attendanceMap = new Map(attendanceRecords.map(r => [r.userId, r]));
+
+  const result = employees.map(emp => {
+    const att = attendanceMap.get(emp.id) || null;
+    return {
+      employee: emp,
+      attendance: att ? {
+        id: att.id,
+        checkIn: att.checkIn,
+        checkOut: att.checkOut,
+        status: att.status,
+        note: att.note,
+        lateMinutes: att.lateMinutes,
+        workHours: att.workHours,
+      } : null,
+    };
+  });
+
+  res.json(result);
+});
+
+// Admin: mark/update attendance for a single employee on a date
+router.post("/mark", requireRole("superadmin", "admin"), async (req: AuthRequest, res: Response) => {
+  const { userId, date, status, checkIn, checkOut, note } = req.body;
+
+  if (!userId || !date || !status) {
+    res.status(400).json({ message: "userId, date va status kerak" });
+    return;
+  }
+
+  const checkInDate = checkIn ? new Date(`${date}T${checkIn}:00`) : null;
+  const checkOutDate = checkOut ? new Date(`${date}T${checkOut}:00`) : null;
+  const workHours = calcWorkHours(checkInDate, checkOutDate);
+
+  const userWithShift = await db
+    .select({ startTime: shiftsTable.startTime, lateThreshold: shiftsTable.lateThresholdMinutes })
+    .from(usersTable)
+    .leftJoin(shiftsTable, eq(usersTable.shiftId, shiftsTable.id))
+    .where(eq(usersTable.id, Number(userId)))
+    .limit(1);
+
+  let lateMinutes = 0;
+  if (checkInDate && userWithShift[0]?.startTime && status === "present") {
+    lateMinutes = calcLateMinutes(checkInDate, userWithShift[0].startTime, date);
+  }
+
+  const existing = await db
+    .select()
+    .from(attendanceTable)
+    .where(and(eq(attendanceTable.userId, Number(userId)), eq(attendanceTable.date, date)))
+    .limit(1);
+
+  let record;
+  if (existing[0]) {
+    const [updated] = await db
+      .update(attendanceTable)
+      .set({ checkIn: checkInDate, checkOut: checkOutDate, status, note: note || null, lateMinutes, workHours, updatedAt: new Date() })
+      .where(eq(attendanceTable.id, existing[0].id))
+      .returning();
+    record = updated;
+  } else {
+    const [created] = await db
+      .insert(attendanceTable)
+      .values({ userId: Number(userId), date, checkIn: checkInDate, checkOut: checkOutDate, status, note: note || null, lateMinutes, earlyLeaveMinutes: 0, workHours })
+      .returning();
+    record = created;
+  }
+
+  res.json(record);
+});
+
 router.get("/today", async (req: AuthRequest, res: Response) => {
   const today = new Date().toISOString().split("T")[0];
   const conditions: SQL[] = [
