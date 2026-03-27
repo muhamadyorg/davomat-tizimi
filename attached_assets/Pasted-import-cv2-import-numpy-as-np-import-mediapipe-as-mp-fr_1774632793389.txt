@@ -1,0 +1,1428 @@
+import cv2
+import numpy as np
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+import os
+import urllib.request
+import time
+import json
+import random
+import math
+from collections import deque
+from dataclasses import dataclass
+from typing import Optional, List, Tuple, Any
+from math import cos, sin, pi
+from datetime import datetime
+
+@dataclass
+class Config:
+    WIDTH: int = 1920
+    HEIGHT: int = 1080
+    TARGET_FPS: int = 60
+    FRAME_TIME: float = 1.0/60.0
+    COLORS: List[Tuple] = None
+    UI_HEIGHT: int = 140
+    BUTTON_WIDTH: int = 100
+    BUTTON_HEIGHT: int = 45
+    COLOR_SIZE: int = 45
+    PINCH_THRESHOLD: float = 40.0
+    DRAW_HOLD_TIME: float = 1.2
+    DOUBLE_TAP_TIME: float = 0.3
+    SMOOTH_ALPHA: float = 0.25
+    MOVE_SENSITIVITY: float = 1.2
+    MIN_MOVE_DIST: float = 3.0
+    MAX_PARTICLES: int = 150
+    
+    def __post_init__(self):
+        if self.COLORS is None:
+            self.COLORS = [
+                (255, 255, 255),
+                (255, 80, 80),
+                (80, 255, 80),
+                (80, 160, 255),
+                (255, 255, 80),
+                (200, 80, 255),
+                (80, 255, 255),
+                (255, 140, 255),
+                (180, 180, 180),
+                (40, 40, 40)
+            ]
+
+class SmoothMovement:
+    def __init__(self, smooth_factor=0.15):
+        self.smooth_factor = smooth_factor
+        self.target_pos = None
+        self.current_pos = None
+        self.velocity = np.array([0.0, 0.0])
+        self.damping = 0.85
+        self.max_speed = 25.0
+        self.position_history = deque(maxlen=10)
+        self.physics_mode = 'spring'
+        self.precision_mode = False
+        self.last_update_time = time.time()
+    
+    def update(self, target_pos, delta_time=None):
+        if delta_time is None:
+            delta_time = time.time() - self.last_update_time
+            delta_time = min(0.1, max(0.001, delta_time))
+        
+        self.target_pos = np.array(target_pos, dtype=np.float32)
+        
+        if self.current_pos is None:
+            self.current_pos = self.target_pos.copy()
+            self.position_history.append(self.current_pos.copy())
+            self.last_update_time = time.time()
+            return self.current_pos.copy()
+        
+        dx = self.target_pos[0] - self.current_pos[0]
+        dy = self.target_pos[1] - self.current_pos[1]
+        distance = math.hypot(dx, dy)
+        
+        if distance < 30:
+            self.precision_mode = True
+            current_smooth = 0.08
+        else:
+            self.precision_mode = False
+            current_smooth = self.smooth_factor
+        
+        if self.physics_mode == 'spring':
+            max_speed = 15.0 if self.precision_mode else self.max_speed
+            accel_x = dx * 0.3 - self.velocity[0] * 0.1
+            accel_y = dy * 0.3 - self.velocity[1] * 0.1
+            self.velocity[0] = max(-max_speed, min(max_speed, self.velocity[0] + accel_x))
+            self.velocity[1] = max(-max_speed, min(max_speed, self.velocity[1] + accel_y))
+            self.velocity *= self.damping
+            self.current_pos += self.velocity * delta_time * 60
+        else:
+            self.current_pos += (self.target_pos - self.current_pos) * current_smooth
+        
+        self.position_history.append(self.current_pos.copy())
+        self.last_update_time = time.time()
+        return self.current_pos.copy()
+    
+    def get_smooth_position(self):
+        if self.current_pos is None:
+            return None
+        return self.current_pos.copy()
+    
+    def get_trail(self, max_points=5):
+        points = list(self.position_history)
+        if len(points) < 2:
+            return []
+        return points[-max_points:]
+
+class MagneticSnap:
+    def __init__(self, snap_distance=40, grid_size=50):
+        self.snap_distance = snap_distance
+        self.grid_size = grid_size
+        self.snap_enabled = True
+        self.grid_enabled = False
+        self.snap_preview = None
+        self.snap_strength = 0.0
+    
+    def check_snapping(self, obj_pos, obj, all_objects, exclude_self=True):
+        if not self.snap_enabled:
+            return obj_pos, False
+        
+        best_snap = None
+        min_dist = self.snap_distance
+        obj_center = obj_pos
+        
+        for other in all_objects:
+            if exclude_self and other is obj:
+                continue
+            
+            other_center = ((other.bbox[0] + other.bbox[2]) / 2, (other.bbox[1] + other.bbox[3]) / 2)
+            dist = math.hypot(obj_center[0] - other_center[0], obj_center[1] - other_center[1])
+            
+            if dist < min_dist:
+                min_dist = dist
+                best_snap = other_center
+        
+        if self.grid_enabled:
+            grid_x = round(obj_center[0] / self.grid_size) * self.grid_size
+            grid_y = round(obj_center[1] / self.grid_size) * self.grid_size
+            grid_dist = math.hypot(obj_center[0] - grid_x, obj_center[1] - grid_y)
+            
+            if grid_dist < min_dist:
+                best_snap = (grid_x, grid_y)
+                min_dist = grid_dist
+        
+        if best_snap:
+            self.snap_strength = 1.0 - (min_dist / self.snap_distance)
+            self.snap_preview = best_snap
+            return best_snap, True
+        
+        self.snap_strength = 0.0
+        self.snap_preview = None
+        return obj_pos, False
+
+class FastMath:
+    @staticmethod
+    def dist(p1, p2):
+        return ((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2) ** 0.5
+    
+    @staticmethod
+    def smooth(prev, curr, alpha=0.25):
+        if prev is None:
+            return curr
+        return (
+            int(prev[0] * (1 - alpha) + curr[0] * alpha),
+            int(prev[1] * (1 - alpha) + curr[1] * alpha)
+        )
+    
+    @staticmethod
+    def get_center(bbox):
+        return ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+
+class ParticleSystem:
+    def __init__(self, max_particles=150):
+        self.particles = []
+        self.max_particles = max_particles
+        
+    def emit(self, pos, color, count=5):
+        for _ in range(min(count, 8)):
+            angle = random.uniform(0, 2 * np.pi)
+            speed = random.uniform(2, 6)
+            velocity = np.array([np.cos(angle) * speed, np.sin(angle) * speed])
+            life = random.uniform(0.4, 0.8)
+            size = random.randint(2, 4)
+            self.particles.append({
+                'pos': np.array(pos, dtype=np.float32),
+                'vel': velocity,
+                'life': life,
+                'color': color,
+                'size': size
+            })
+    
+    def update(self):
+        self.particles = [p for p in self.particles if p['life'] > 0]
+        for p in self.particles:
+            p['pos'] += p['vel']
+            p['vel'] *= 0.96
+            p['life'] -= 0.015
+    
+    def draw(self, canvas):
+        for p in self.particles:
+            alpha = p['life']
+            color = tuple(int(c * alpha) for c in p['color'])
+            if alpha > 0.2:
+                cv2.circle(canvas, tuple(p['pos'].astype(int)), p['size'], color, -1, cv2.LINE_AA)
+
+class BrushCustomizer:
+    def __init__(self):
+        self.brushes = {
+            'normal': {
+                'name': 'Normal',
+                'thickness': 4,
+                'pattern': 'solid',
+                'color': (255,255,255),
+                'icon': '●'
+            },
+            'dotted': {
+                'name': 'Dotted',
+                'thickness': 3,
+                'pattern': 'dot',
+                'color': (255,100,100),
+                'icon': '○'
+            },
+            'dashed': {
+                'name': 'Dashed',
+                'thickness': 4,
+                'pattern': 'dash',
+                'color': (100,255,100),
+                'icon': '─'
+            },
+            'airbrush': {
+                'name': 'Airbrush',
+                'thickness': 10,
+                'pattern': 'spray',
+                'color': (100,100,255),
+                'icon': '✧'
+            },
+            'glow': {
+                'name': 'Glow',
+                'thickness': 8,
+                'pattern': 'glow',
+                'color': (255,100,255),
+                'icon': '★'
+            }
+        }
+        self.current_brush = 'normal'
+    
+    def draw_pattern(self, canvas, p1, p2, color, thickness, pattern):
+        if pattern == 'solid':
+            cv2.line(canvas, p1, p2, color, thickness, cv2.LINE_AA)
+        elif pattern == 'dot':
+            dist = FastMath.dist(p1, p2)
+            steps = max(int(dist / 4), 1)
+            for i in range(0, steps, 2):
+                t = i / steps
+                x = int(p1[0] + (p2[0]-p1[0])*t)
+                y = int(p1[1] + (p2[1]-p1[1])*t)
+                cv2.circle(canvas, (x, y), thickness//2, color, -1, cv2.LINE_AA)
+        elif pattern == 'dash':
+            dist = FastMath.dist(p1, p2)
+            dash_length = 10
+            num_dashes = int(dist / dash_length)
+            for i in range(0, num_dashes, 2):
+                t1 = i / num_dashes
+                t2 = min((i+1) / num_dashes, 1.0)
+                x1 = int(p1[0] + (p2[0]-p1[0])*t1)
+                y1 = int(p1[1] + (p2[1]-p1[1])*t1)
+                x2 = int(p1[0] + (p2[0]-p1[0])*t2)
+                y2 = int(p1[1] + (p2[1]-p1[1])*t2)
+                cv2.line(canvas, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
+        elif pattern == 'spray':
+            dist = FastMath.dist(p1, p2)
+            steps = int(dist)
+            for i in range(steps):
+                t = i / steps
+                x = int(p1[0] + (p2[0]-p1[0])*t) + random.randint(-6, 6)
+                y = int(p1[1] + (p2[1]-p1[1])*t) + random.randint(-6, 6)
+                if 0 <= x < canvas.shape[1] and 0 <= y < canvas.shape[0]:
+                    cv2.circle(canvas, (x, y), random.randint(1, 2), color, -1, cv2.LINE_AA)
+        elif pattern == 'glow':
+            for t in range(thickness, thickness//2, -2):
+                alpha = 0.3 if t == thickness else 0.6
+                glow_color = tuple(int(c * alpha) for c in color)
+                cv2.line(canvas, p1, p2, glow_color, t, cv2.LINE_AA)
+
+class ShapeAI:
+    def __init__(self):
+        self.shapes = []
+        self.confidence = 0.0
+    
+    def detect_shape(self, points):
+        if len(points) < 8:
+            return 'line', 1.0
+        
+        pts = np.array(points, dtype=np.int32)
+        first = pts[0]
+        last = pts[-1]
+        dist = FastMath.dist(first, last)
+        
+        if dist > 40:
+            return 'line', 0.8
+        
+        epsilon = 0.02 * cv2.arcLength(pts, True)
+        approx = cv2.approxPolyDP(pts, epsilon, True)
+        
+        if len(approx) == 3:
+            return 'triangle', 0.9
+        elif len(approx) == 4:
+            x, y, w, h = cv2.boundingRect(approx)
+            aspect_ratio = max(w, h) / min(w, h) if min(w, h) > 0 else 1
+            if aspect_ratio < 1.2:
+                return 'square', 0.95
+            else:
+                return 'rectangle', 0.9
+        elif len(approx) > 6:
+            area = cv2.contourArea(pts)
+            perimeter = cv2.arcLength(pts, True)
+            if perimeter > 0:
+                circularity = 4 * np.pi * area / (perimeter * perimeter)
+                if circularity > 0.75:
+                    return 'circle', circularity
+        
+        return 'freeform', 0.6
+    
+    def perfect_shape(self, points, shape_type):
+        pts = np.array(points, dtype=np.int32)
+        
+        if shape_type == 'circle':
+            (x, y), radius = cv2.minEnclosingCircle(pts)
+            perfect = []
+            for i in range(0, 360, 10):
+                rad = np.deg2rad(i)
+                perfect.append([int(x + radius * np.cos(rad)), int(y + radius * np.sin(rad))])
+            return perfect
+        elif shape_type == 'square':
+            x, y, w, h = cv2.boundingRect(pts)
+            size = max(w, h)
+            return [[x, y], [x+size, y], [x+size, y+size], [x, y+size], [x, y]]
+        elif shape_type == 'rectangle':
+            x, y, w, h = cv2.boundingRect(pts)
+            return [[x, y], [x+w, y], [x+w, y+h], [x, y+h], [x, y]]
+        elif shape_type == 'triangle':
+            rect = cv2.minAreaRect(pts)
+            box = cv2.boxPoints(rect)
+            center = np.mean(box, axis=0)
+            size = np.mean([np.linalg.norm(box[i] - box[(i+1)%4]) for i in range(4)]) / 2
+            return [[center[0], center[1] - size],
+                    [center[0] - size*0.8, center[1] + size*0.5],
+                    [center[0] + size*0.8, center[1] + size*0.5],
+                    [center[0], center[1] - size]]
+        return points
+
+class DrawingObject:
+    def __init__(self, points, color, thickness=4, brush_type='normal', shape_type='freeform'):
+        self.points = np.array(points, dtype=np.float32)
+        self.color = color
+        self.thickness = thickness
+        self.selected = False
+        self.brush_type = brush_type
+        self.shape_type = shape_type
+        self.id = random.randint(1000, 9999)
+        self.update_bbox()
+    
+    def update_bbox(self):
+        if len(self.points) == 0:
+            return
+        x = self.points[:, 0]
+        y = self.points[:, 1]
+        self.bbox = [np.min(x), np.min(y), np.max(x), np.max(y)]
+    
+    def draw(self, canvas, moving=False):
+        if len(self.points) < 2:
+            return
+        
+        pts = self.points.astype(np.int32)
+        
+        if self.selected:
+            x1, y1, x2, y2 = map(int, self.bbox)
+            cv2.rectangle(canvas, (x1-8, y1-8), (x2+8, y2+8), (100, 255, 100), 2, cv2.LINE_AA)
+            cv2.circle(canvas, (x2+8, y2+8), 10, (0, 200, 255), -1, cv2.LINE_AA)
+            cv2.circle(canvas, (x2+8, y2+8), 5, (255, 255, 255), -1, cv2.LINE_AA)
+        
+        if len(pts) > 1:
+            for i in range(len(pts) - 1):
+                cv2.line(canvas, tuple(pts[i]), tuple(pts[i+1]), self.color, self.thickness, cv2.LINE_AA)
+    
+    def move(self, dx, dy):
+        self.points[:, 0] += dx
+        self.points[:, 1] += dy
+        self.update_bbox()
+    
+    def scale(self, scale_factor, pivot):
+        self.points = pivot + (self.points - pivot) * scale_factor
+        self.update_bbox()
+    
+    def copy(self):
+        return DrawingObject(self.points.copy(), self.color, self.thickness, self.brush_type, self.shape_type)
+
+class Group:
+    def __init__(self, objects, name="Group"):
+        self.objects = objects
+        self.name = name
+        self.selected = False
+        self.id = random.randint(1000, 9999)
+        self.update_bbox()
+    
+    def update_bbox(self):
+        if not self.objects:
+            return
+        x1 = min(obj.bbox[0] for obj in self.objects)
+        y1 = min(obj.bbox[1] for obj in self.objects)
+        x2 = max(obj.bbox[2] for obj in self.objects)
+        y2 = max(obj.bbox[3] for obj in self.objects)
+        self.bbox = [x1, y1, x2, y2]
+    
+    def move(self, dx, dy):
+        for obj in self.objects:
+            obj.move(dx, dy)
+        self.update_bbox()
+    
+    def scale(self, scale_factor, pivot):
+        for obj in self.objects:
+            obj.scale(scale_factor, pivot)
+        self.update_bbox()
+    
+    def draw(self, canvas, moving=False):
+        for obj in self.objects:
+            obj.draw(canvas, moving)
+        
+        if self.selected:
+            x1, y1, x2, y2 = map(int, self.bbox)
+            cv2.rectangle(canvas, (x1-12, y1-12), (x2+12, y2+12), (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(canvas, f"Group", (x1, y1-15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+
+class MultiSelect:
+    def __init__(self):
+        self.selection_rect = None
+        self.selecting = False
+        self.start_pos = None
+    
+    def start_selection(self, pos):
+        self.start_pos = pos
+        self.selection_rect = [pos[0], pos[1], pos[0], pos[1]]
+        self.selecting = True
+    
+    def update_selection(self, pos):
+        if self.selecting and self.selection_rect:
+            self.selection_rect[2] = pos[0]
+            self.selection_rect[3] = pos[1]
+    
+    def end_selection(self):
+        self.selecting = False
+        rect = self.selection_rect
+        self.selection_rect = None
+        return rect
+    
+    def get_selected_objects(self, objects, groups):
+        if not self.selection_rect and not self.selecting:
+            return []
+        
+        x1, y1, x2, y2 = self.selection_rect
+        x1, x2 = min(x1, x2), max(x1, x2)
+        y1, y2 = min(y1, y2), max(y1, y2)
+        
+        selected = []
+        
+        for obj in objects:
+            center = FastMath.get_center(obj.bbox)
+            if x1 <= center[0] <= x2 and y1 <= center[1] <= y2:
+                selected.append(obj)
+        
+        for group in groups:
+            center = FastMath.get_center(group.bbox)
+            if x1 <= center[0] <= x2 and y1 <= center[1] <= y2:
+                selected.append(group)
+        
+        return selected
+
+class GroupMoveHandler:
+    def __init__(self):
+        self.group_centers = {}
+        self.group_velocities = {}
+        self.relative_positions = {}
+    
+    def prepare_group_move(self, group, pivot_pos):
+        group_id = id(group)
+        self.group_centers[group_id] = np.array(FastMath.get_center(group.bbox))
+        self.group_velocities[group_id] = np.array([0.0, 0.0])
+        
+        self.relative_positions[group_id] = []
+        for obj in group.objects:
+            obj_center = np.array(FastMath.get_center(obj.bbox))
+            rel_pos = obj_center - self.group_centers[group_id]
+            self.relative_positions[group_id].append(rel_pos)
+    
+    def update_group_move(self, group, new_center):
+        group_id = id(group)
+        if group_id not in self.group_centers:
+            return
+        
+        current_center = self.group_centers[group_id]
+        velocity = new_center - current_center
+        self.group_velocities[group_id] = self.group_velocities[group_id] * 0.8 + velocity * 0.2
+        
+        smoothed_center = current_center + self.group_velocities[group_id]
+        self.group_centers[group_id] = smoothed_center
+        
+        for i, obj in enumerate(group.objects):
+            if i < len(self.relative_positions[group_id]):
+                new_pos = smoothed_center + self.relative_positions[group_id][i]
+                current_obj_center = np.array(FastMath.get_center(obj.bbox))
+                obj.move(new_pos[0] - current_obj_center[0], new_pos[1] - current_obj_center[1])
+        
+        group.update_bbox()
+        return smoothed_center
+    
+    def clear_group(self, group):
+        group_id = id(group)
+        if group_id in self.group_centers:
+            del self.group_centers[group_id]
+        if group_id in self.group_velocities:
+            del self.group_velocities[group_id]
+        if group_id in self.relative_positions:
+            del self.relative_positions[group_id]
+
+class SmartSelection:
+    def __init__(self):
+        self.last_selected = None
+        self.selection_history = deque(maxlen=5)
+        self.hover_object = None
+    
+    def find_best_object(self, pos, objects, groups):
+        all_items = objects + groups
+        if not all_items:
+            return None
+        
+        best_item = None
+        best_score = -1
+        
+        for item in all_items:
+            center = FastMath.get_center(item.bbox)
+            dist = FastMath.dist(pos, center)
+            
+            if dist > 150:
+                continue
+            
+            dist_score = 1.0 / (dist + 1)
+            if isinstance(item, DrawingObject):
+                size_score = (item.bbox[2] - item.bbox[0]) * (item.bbox[3] - item.bbox[1]) / 10000
+            else:
+                size_score = (item.bbox[2] - item.bbox[0]) * (item.bbox[3] - item.bbox[1]) / 20000
+            
+            history_score = 1.5 if item == self.last_selected else 1.0
+            
+            if item == self.hover_object:
+                hover_score = 1.3
+            else:
+                hover_score = 1.0
+            
+            score = dist_score * (1 + size_score) * history_score * hover_score
+            
+            if score > best_score:
+                best_score = score
+                best_item = item
+        
+        if best_item:
+            self.hover_object = best_item
+        
+        return best_item
+    
+    def select(self, item):
+        if item:
+            self.last_selected = item
+            self.selection_history.append(item)
+        return item
+
+class ProjectManager:
+    def __init__(self):
+        self.current_project = "untitled"
+        self.projects_dir = "projects"
+        self.autosave_interval = 300
+        self.last_autosave = time.time()
+        
+        if not os.path.exists(self.projects_dir):
+            os.makedirs(self.projects_dir)
+    
+    def save_project(self, objects, groups, filename=None):
+        if filename is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{self.projects_dir}/project_{timestamp}.json"
+        
+        project_data = {
+            'version': '2.0',
+            'timestamp': time.time(),
+            'objects': [],
+            'groups': [],
+            'metadata': {
+                'name': self.current_project,
+                'object_count': len(objects),
+                'group_count': len(groups)
+            }
+        }
+        
+        for obj in objects:
+            obj_data = {
+                'points': obj.points.tolist(),
+                'color': obj.color,
+                'thickness': obj.thickness,
+                'brush_type': obj.brush_type,
+                'shape_type': obj.shape_type,
+                'id': obj.id
+            }
+            project_data['objects'].append(obj_data)
+        
+        for group in groups:
+            group_data = {
+                'name': group.name,
+                'object_ids': [obj.id for obj in group.objects],
+                'id': group.id
+            }
+            project_data['groups'].append(group_data)
+        
+        with open(filename, 'w') as f:
+            json.dump(project_data, f, indent=2)
+        
+        return filename
+    
+    def load_project(self, filename):
+        try:
+            with open(filename, 'r') as f:
+                data = json.load(f)
+            
+            objects = []
+            id_map = {}
+            
+            for obj_data in data['objects']:
+                obj = DrawingObject(
+                    obj_data['points'],
+                    tuple(obj_data['color']),
+                    obj_data['thickness'],
+                    obj_data['brush_type'],
+                    obj_data['shape_type']
+                )
+                obj.id = obj_data.get('id', random.randint(1000, 9999))
+                objects.append(obj)
+                id_map[obj.id] = obj
+            
+            groups = []
+            for group_data in data.get('groups', []):
+                group_objects = [id_map[oid] for oid in group_data['object_ids'] if oid in id_map]
+                if group_objects:
+                    group = Group(group_objects, group_data['name'])
+                    group.id = group_data.get('id', random.randint(1000, 9999))
+                    groups.append(group)
+            
+            return objects, groups
+        
+        except Exception as e:
+            print(f"Error loading project: {e}")
+            return [], []
+    
+    def list_projects(self):
+        projects = []
+        for f in os.listdir(self.projects_dir):
+            if f.endswith('.json'):
+                path = os.path.join(self.projects_dir, f)
+                mtime = os.path.getmtime(path)
+                projects.append({
+                    'name': f,
+                    'path': path,
+                    'modified': datetime.fromtimestamp(mtime)
+                })
+        return sorted(projects, key=lambda x: x['modified'], reverse=True)
+    
+    def check_autosave(self, objects, groups):
+        if time.time() - self.last_autosave > self.autosave_interval:
+            filename = f"{self.projects_dir}/autosave_{self.current_project}.json"
+            self.save_project(objects, groups, filename)
+            self.last_autosave = time.time()
+
+class Clipboard:
+    def __init__(self):
+        self.copied_objects = []
+        self.copied_groups = []
+    
+    def copy(self, objects, groups):
+        self.copied_objects = [obj.copy() for obj in objects]
+        self.copied_groups = []
+        for group in groups:
+            copied_group = Group([obj.copy() for obj in group.objects], group.name)
+            self.copied_groups.append(copied_group)
+    
+    def paste(self, offset=(30, 30)):
+        pasted_objects = [obj.copy() for obj in self.copied_objects]
+        pasted_groups = []
+        
+        for obj in pasted_objects:
+            obj.move(offset[0], offset[1])
+        
+        for group in self.copied_groups:
+            new_group = Group([obj.copy() for obj in group.objects], group.name)
+            new_group.move(offset[0], offset[1])
+            pasted_groups.append(new_group)
+        
+        return pasted_objects, pasted_groups
+    
+    def has_content(self):
+        return len(self.copied_objects) > 0 or len(self.copied_groups) > 0
+
+class ProfessionalUI:
+    def __init__(self, config):
+        self.config = config
+        self.buttons = []
+        self.fps_history = deque(maxlen=30)
+        self.mode = "draw"
+        self.brush_size = 4
+        self.setup_buttons()
+    
+    def setup_buttons(self):
+        w = self.config.WIDTH
+        y_start = 10
+        button_h = self.config.BUTTON_HEIGHT
+        spacing = 5
+        color_size = self.config.COLOR_SIZE
+        color_spacing = 5
+        colors_x_start = 10
+        
+        for i, color in enumerate(self.config.COLORS):
+            x = colors_x_start + i * (color_size + color_spacing)
+            self.buttons.append({
+                'rect': (x, y_start, x + color_size, y_start + color_size),
+                'type': 'color',
+                'color': color,
+                'name': f'color_{i}'
+            })
+        
+        tools_x_start = colors_x_start + len(self.config.COLORS) * (color_size + color_spacing) + 20
+        
+        tools = [
+            ('✏️', 'draw', 'Draw'),
+            ('🔲', 'select', 'Select'),
+            ('👥', 'group', 'Group'),
+            ('🔓', 'ungroup', 'Ungroup'),
+            ('📋', 'copy', 'Copy'),
+            ('📌', 'paste', 'Paste'),
+            ('💾', 'save', 'Save'),
+            ('📂', 'load', 'Load'),
+            ('🗑️', 'clear', 'Clear'),
+            ('🎨', 'brushes', 'Brushes')
+        ]
+        
+        for i, (icon, action, name) in enumerate(tools):
+            x = tools_x_start + i * (self.config.BUTTON_WIDTH + spacing)
+            self.buttons.append({
+                'rect': (x, y_start, x + self.config.BUTTON_WIDTH, y_start + button_h),
+                'type': 'tool',
+                'action': action,
+                'name': name,
+                'icon': icon
+            })
+        
+        brushes_x = w - 200
+        self.buttons.append({
+            'rect': (brushes_x, y_start, brushes_x + 190, y_start + button_h),
+            'type': 'brush_selector',
+            'action': 'change_brush',
+            'name': 'Brush'
+        })
+    
+    def draw(self, canvas, active_color, fps, mode, brush_name, selected_count=0):
+        h = self.config.UI_HEIGHT
+        overlay = canvas.copy()
+        cv2.rectangle(overlay, (0, 0), (self.config.WIDTH, h), (20, 20, 30), -1)
+        cv2.addWeighted(overlay, 0.95, canvas, 0.05, 0, canvas)
+        
+        for btn in self.buttons:
+            x1, y1, x2, y2 = btn['rect']
+            
+            if btn['type'] == 'color':
+                color = btn['color']
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), color, -1, cv2.LINE_AA)
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), (100, 100, 100), 1, cv2.LINE_AA)
+                if color == active_color:
+                    cv2.rectangle(canvas, (x1-2, y1-2), (x2+2, y2+2), (255, 255, 255), 2, cv2.LINE_AA)
+            
+            elif btn['type'] == 'tool':
+                bg_color = (60, 70, 80) if btn['action'] != mode else (80, 140, 80)
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), bg_color, -1, cv2.LINE_AA)
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), (100, 100, 100), 1, cv2.LINE_AA)
+                cv2.putText(canvas, btn['icon'], (x1+10, y2-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            elif btn['type'] == 'brush_selector':
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), (70, 70, 90), -1, cv2.LINE_AA)
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), (100, 100, 100), 1, cv2.LINE_AA)
+                cv2.putText(canvas, f"🖌️ {brush_name}", (x1+10, y2-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        status_y = h - 25
+        cv2.putText(canvas, f"FPS: {fps:.0f}", (10, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.putText(canvas, f"Mode: {mode.upper()}", (100, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        cv2.putText(canvas, f"Selected: {selected_count}", (220, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        hints = "👆 Draw  |  🤏 Select  |  ✌️ Multi  |  👌 Move  |  🖐️ Delete"
+        cv2.putText(canvas, hints, (self.config.WIDTH - 500, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    
+    def handle_click(self, pos):
+        x, y = pos
+        if y > self.config.UI_HEIGHT:
+            return None
+        
+        for btn in self.buttons:
+            x1, y1, x2, y2 = btn['rect']
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                return btn
+        return None
+
+class ProfessionalAirCanvas:
+    def __init__(self):
+        self.config = Config()
+        self.ui = ProfessionalUI(self.config)
+        self.particles = ParticleSystem(self.config.MAX_PARTICLES)
+        self.brush_customizer = BrushCustomizer()
+        self.shape_ai = ShapeAI()
+        self.multi_select = MultiSelect()
+        self.project_manager = ProjectManager()
+        self.clipboard = Clipboard()
+        self.smooth_movement = SmoothMovement(smooth_factor=0.15)
+        self.magnetic_snap = MagneticSnap(snap_distance=40)
+        self.smart_selection = SmartSelection()
+        self.group_move_handler = GroupMoveHandler()
+        
+        self.fps = 0
+        self.frame_count = 0
+        self.last_time = time.time()
+        
+        self.cap = cv2.VideoCapture(0)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.WIDTH)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.HEIGHT)
+        self.cap.set(cv2.CAP_PROP_FPS, self.config.TARGET_FPS)
+        self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+        
+        self.objects = []
+        self.groups = []
+        self.current_stroke = []
+        self.selected_objects = []
+        self.selected_groups = []
+        self.active_color = self.config.COLORS[0]
+        self.mode = "draw"
+        
+        self.right_prev = None
+        self.left_prev = None
+        
+        self.drawing_requested = False
+        self.drawing_start_time = 0
+        self.is_drawing = False
+        self.last_right_pos = None
+        
+        self.left_pinching = False
+        self.left_pinch_pos = None
+        self.resize_mode = False
+        self.resize_obj = None
+        self.move_mode = False
+        self.move_start_pos = None
+        self.move_offsets = {}
+        
+        self.last_tap_time = 0
+        self.last_tap_pos = None
+        
+        self.moving_object = None
+        self.move_smoother = None
+        self.object_move_data = {}
+        
+        self.setup_detector()
+        cv2.setUseOptimized(True)
+    
+    def setup_detector(self):
+        model_path = "hand_landmarker.task"
+        
+        if not os.path.exists(model_path):
+            print("Downloading hand model...")
+            urllib.request.urlretrieve(
+                "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
+                model_path
+            )
+        
+        base_options = python.BaseOptions(
+            model_asset_path=model_path,
+            delegate=python.BaseOptions.Delegate.CPU
+        )
+        
+        options = vision.HandLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.VIDEO,
+            num_hands=2,
+            min_hand_detection_confidence=0.6,
+            min_tracking_confidence=0.6
+        )
+        
+        self.detector = vision.HandLandmarker.create_from_options(options)
+    
+    def is_index_pointing_up(self, landmarks):
+        index_up = landmarks[8].y < landmarks[6].y
+        middle_down = landmarks[12].y > landmarks[10].y
+        ring_down = landmarks[16].y > landmarks[14].y
+        pinky_down = landmarks[20].y > landmarks[18].y
+        return index_up and middle_down and ring_down and pinky_down
+    
+    def count_fingers_up(self, landmarks):
+        count = 0
+        if landmarks[4].x < landmarks[3].x:
+            count += 1
+        if landmarks[8].y < landmarks[6].y:
+            count += 1
+        if landmarks[12].y < landmarks[10].y:
+            count += 1
+        if landmarks[16].y < landmarks[14].y:
+            count += 1
+        if landmarks[20].y < landmarks[18].y:
+            count += 1
+        return count
+    
+    def get_pinch_distance(self, landmarks):
+        w, h = self.config.WIDTH, self.config.HEIGHT
+        index = (landmarks[8].x * w, landmarks[8].y * h)
+        thumb = (landmarks[4].x * w, landmarks[4].y * h)
+        return FastMath.dist(index, thumb)
+    
+    def is_pinching(self, landmarks):
+        return self.get_pinch_distance(landmarks) < self.config.PINCH_THRESHOLD
+    
+    def get_landmark_pos(self, landmark):
+        w, h = self.config.WIDTH, self.config.HEIGHT
+        return (int(landmark.x * w), int(landmark.y * h))
+    
+    def draw_hand_landmarks(self, canvas, landmarks, is_right=False):
+        h, w = canvas.shape[:2]
+        
+        connections = [
+            (0,1),(1,2),(2,3),(3,4), (0,5),(5,6),(6,7),(7,8),
+            (0,9),(9,10),(10,11),(11,12), (0,13),(13,14),(14,15),(15,16),
+            (0,17),(17,18),(18,19),(19,20), (5,9),(9,13),(13,17)
+        ]
+        
+        points = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
+        color = (0, 255, 0) if not is_right else (255, 255, 0)
+        
+        for conn in connections:
+            if conn[0] < len(points) and conn[1] < len(points):
+                cv2.line(canvas, points[conn[0]], points[conn[1]], color, 2, cv2.LINE_AA)
+        
+        for i, point in enumerate(points):
+            if i == 8:
+                cv2.circle(canvas, point, 8, (0, 255, 255), -1, cv2.LINE_AA)
+            else:
+                cv2.circle(canvas, point, 4, color, -1, cv2.LINE_AA)
+    
+    def get_all_selectable(self):
+        return self.objects + self.groups
+    
+    def clear_selection(self):
+        for obj in self.objects:
+            obj.selected = False
+        for group in self.groups:
+            group.selected = False
+        self.selected_objects = []
+        self.selected_groups = []
+    
+    def select_object(self, pos):
+        self.clear_selection()
+        best_item = self.smart_selection.find_best_object(pos, self.objects, self.groups)
+        
+        if best_item:
+            best_item.selected = True
+            if isinstance(best_item, DrawingObject):
+                self.selected_objects = [best_item]
+            elif isinstance(best_item, Group):
+                self.selected_groups = [best_item]
+            self.smart_selection.select(best_item)
+    
+    def group_selected(self):
+        if len(self.selected_objects) >= 2:
+            group = Group(self.selected_objects.copy(), f"Group{len(self.groups)+1}")
+            self.groups.append(group)
+            
+            for obj in self.selected_objects:
+                if obj in self.objects:
+                    self.objects.remove(obj)
+            
+            self.clear_selection()
+            group.selected = True
+            self.selected_groups = [group]
+    
+    def ungroup_selected(self):
+        for group in self.selected_groups:
+            self.objects.extend(group.objects)
+            self.groups.remove(group)
+        
+        self.clear_selection()
+    
+    def copy_selected(self):
+        self.clipboard.copy(self.selected_objects, self.selected_groups)
+    
+    def paste_copied(self):
+        pasted_objects, pasted_groups = self.clipboard.paste()
+        self.objects.extend(pasted_objects)
+        self.groups.extend(pasted_groups)
+        self.clear_selection()
+        
+        for obj in pasted_objects:
+            obj.selected = True
+            self.selected_objects.append(obj)
+        for group in pasted_groups:
+            group.selected = True
+            self.selected_groups.append(group)
+    
+    def prepare_move(self, items, start_pos):
+        self.move_start_pos = np.array(start_pos)
+        self.move_offsets = {}
+        self.object_move_data = {}
+        
+        for item in items:
+            center = np.array(FastMath.get_center(item.bbox))
+            self.move_offsets[id(item)] = center - self.move_start_pos
+            
+            smoother = SmoothMovement(smooth_factor=0.12)
+            smoother.current_pos = center.copy()
+            smoother.target_pos = center.copy()
+            self.object_move_data[id(item)] = {
+                'smoother': smoother,
+                'last_pos': center.copy()
+            }
+            
+            if isinstance(item, Group):
+                self.group_move_handler.prepare_group_move(item, center)
+    
+    def update_move(self, target_pos):
+        if self.move_start_pos is None:
+            return
+        
+        target_pos = np.array(target_pos)
+        all_selected = self.selected_objects + self.selected_groups
+        
+        for item in all_selected:
+            item_id = id(item)
+            if item_id in self.move_offsets and item_id in self.object_move_data:
+                target_center = target_pos + self.move_offsets[item_id]
+                
+                snap_pos, snapped = self.magnetic_snap.check_snapping(
+                    target_center, item, self.get_all_selectable(), exclude_self=True
+                )
+                
+                if snapped:
+                    target_center = np.array(snap_pos)
+                
+                data = self.object_move_data[item_id]
+                smoothed = data['smoother'].update(target_center)
+                
+                if isinstance(item, Group):
+                    self.group_move_handler.update_group_move(item, smoothed)
+                else:
+                    dx = smoothed[0] - data['last_pos'][0]
+                    dy = smoothed[1] - data['last_pos'][1]
+                    item.move(dx, dy)
+                
+                data['last_pos'] = smoothed.copy()
+    
+    def end_move(self):
+        self.move_start_pos = None
+        self.move_offsets = {}
+        self.object_move_data = {}
+    
+    def draw_move_feedback(self, canvas):
+        all_selected = self.selected_objects + self.selected_groups
+        
+        for item in all_selected:
+            item_id = id(item)
+            if item_id in self.object_move_data:
+                data = self.object_move_data[item_id]
+                smoother = data['smoother']
+                
+                trail = smoother.get_trail(8)
+                if len(trail) >= 2:
+                    for i in range(1, len(trail)):
+                        alpha = i / len(trail)
+                        color = (int(255 * alpha), int(255 * alpha), 255)
+                        pt1 = tuple(int(x) for x in trail[i-1])
+                        pt2 = tuple(int(x) for x in trail[i])
+                        cv2.line(canvas, pt1, pt2, color, 2, cv2.LINE_AA)
+                
+                if smoother.precision_mode:
+                    center = tuple(int(x) for x in smoother.current_pos)
+                    cv2.circle(canvas, center, 15, (0, 255, 255), 2, cv2.LINE_AA)
+                    cv2.circle(canvas, center, 5, (0, 255, 255), -1, cv2.LINE_AA)
+                
+                velocity = np.linalg.norm(smoother.velocity)
+                if velocity > 2:
+                    center = smoother.current_pos
+                    end = center + smoother.velocity * 2
+                    cv2.arrowedLine(canvas, tuple(center.astype(int)), tuple(end.astype(int)), 
+                                   (0, 255, 0), 2, cv2.LINE_AA, tipLength=0.3)
+        
+        if self.magnetic_snap.snap_preview and self.magnetic_snap.snap_strength > 0:
+            snap_pos = tuple(int(x) for x in self.magnetic_snap.snap_preview)
+            cv2.circle(canvas, snap_pos, int(30 * self.magnetic_snap.snap_strength), 
+                      (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.circle(canvas, snap_pos, 5, (0, 255, 255), -1, cv2.LINE_AA)
+    
+    def process_hands(self, result):
+        w, h = self.config.WIDTH, self.config.HEIGHT
+        
+        if not result.hand_landmarks:
+            self.drawing_requested = False
+            self.is_drawing = False
+            self.left_pinching = False
+            return
+        
+        right_hand = None
+        left_hand = None
+        
+        for i, landmarks in enumerate(result.hand_landmarks):
+            handedness = result.handedness[i][0].category_name
+            if handedness == "Right":
+                right_hand = landmarks
+            else:
+                left_hand = landmarks
+        
+        if right_hand:
+            index_tip = self.get_landmark_pos(right_hand[8])
+            index_tip = FastMath.smooth(self.right_prev, index_tip)
+            self.right_prev = index_tip
+            
+            pointing_up = self.is_index_pointing_up(right_hand)
+            
+            if index_tip[1] < self.config.UI_HEIGHT:
+                btn = self.ui.handle_click(index_tip)
+                if btn:
+                    if btn['type'] == 'color':
+                        self.active_color = btn['color']
+                    elif btn['type'] == 'tool':
+                        self.handle_ui_action(btn['action'])
+                    elif btn['type'] == 'brush_selector':
+                        self.cycle_brush()
+            
+            if self.mode == "draw":
+                if pointing_up:
+                    if not self.drawing_requested:
+                        self.drawing_requested = True
+                        self.drawing_start_time = time.time()
+                        self.last_right_pos = index_tip
+                    else:
+                        hold_time = time.time() - self.drawing_start_time
+                        
+                        if hold_time >= self.config.DRAW_HOLD_TIME and not self.is_drawing:
+                            self.is_drawing = True
+                            self.current_stroke = [index_tip]
+                        elif self.is_drawing:
+                            if FastMath.dist(self.last_right_pos, index_tip) > 5:
+                                self.current_stroke.append(index_tip)
+                                self.last_right_pos = index_tip
+                else:
+                    if self.is_drawing and len(self.current_stroke) > 5:
+                        shape_type, confidence = self.shape_ai.detect_shape(self.current_stroke)
+                        
+                        if confidence > 0.8:
+                            perfect_points = self.shape_ai.perfect_shape(self.current_stroke, shape_type)
+                            obj = DrawingObject(perfect_points, self.active_color,
+                                              self.brush_customizer.brushes[self.brush_customizer.current_brush]['thickness'],
+                                              self.brush_customizer.current_brush, shape_type)
+                        else:
+                            obj = DrawingObject(self.current_stroke, self.active_color,
+                                              self.brush_customizer.brushes[self.brush_customizer.current_brush]['thickness'],
+                                              self.brush_customizer.current_brush, 'freeform')
+                        
+                        self.objects.append(obj)
+                        self.particles.emit(index_tip, self.active_color, 10)
+                    
+                    self.drawing_requested = False
+                    self.is_drawing = False
+                    self.current_stroke = []
+        
+        if left_hand:
+            index_tip = self.get_landmark_pos(left_hand[8])
+            index_tip = FastMath.smooth(self.left_prev, index_tip)
+            self.left_prev = index_tip
+            
+            fingers_up = self.count_fingers_up(left_hand)
+            is_pinching = self.is_pinching(left_hand)
+            
+            if fingers_up == 1 and not is_pinching:
+                current_time = time.time()
+                if current_time - self.last_tap_time < self.config.DOUBLE_TAP_TIME:
+                    if FastMath.dist(index_tip, self.last_tap_pos) < 50:
+                        self.copy_selected()
+                self.last_tap_time = current_time
+                self.last_tap_pos = index_tip
+            
+            if fingers_up == 1 and not is_pinching:
+                if self.mode == "select":
+                    self.select_object(index_tip)
+                elif self.multi_select.selecting:
+                    self.multi_select.update_selection(index_tip)
+            
+            elif fingers_up == 2 and not is_pinching:
+                if not self.multi_select.selecting:
+                    self.multi_select.start_selection(index_tip)
+                else:
+                    self.multi_select.update_selection(index_tip)
+            
+            elif fingers_up == 0 and self.multi_select.selecting:
+                rect = self.multi_select.end_selection()
+                if rect:
+                    selected = self.multi_select.get_selected_objects(self.objects, self.groups)
+                    self.clear_selection()
+                    for item in selected:
+                        item.selected = True
+                        if isinstance(item, DrawingObject):
+                            self.selected_objects.append(item)
+                        elif isinstance(item, Group):
+                            self.selected_groups.append(item)
+            
+            elif is_pinching:
+                if not self.left_pinching:
+                    self.left_pinching = True
+                    self.left_pinch_pos = index_tip
+                    
+                    self.resize_mode = False
+                    self.move_mode = False
+                    
+                    all_selected = self.selected_objects + self.selected_groups
+                    for item in all_selected:
+                        handle_pos = (int(item.bbox[2] + 8), int(item.bbox[3] + 8))
+                        if FastMath.dist(index_tip, handle_pos) < 30:
+                            self.resize_mode = True
+                            self.resize_obj = item
+                            break
+                    
+                    if not self.resize_mode and all_selected:
+                        self.move_mode = True
+                        self.prepare_move(all_selected, index_tip)
+                
+                else:
+                    if self.left_pinch_pos:
+                        if self.resize_mode and self.resize_obj:
+                            dy = index_tip[1] - self.left_pinch_pos[1]
+                            scale = 1 + dy * 0.005
+                            pivot = np.array([self.resize_obj.bbox[0], self.resize_obj.bbox[1]])
+                            self.resize_obj.scale(max(0.5, min(2.0, scale)), pivot)
+                        elif self.move_mode:
+                            self.update_move(index_tip)
+                        
+                        self.left_pinch_pos = index_tip
+            
+            elif fingers_up == 5:
+                for obj in self.selected_objects:
+                    self.particles.emit(obj.bbox[:2], obj.color, 20)
+                    if obj in self.objects:
+                        self.objects.remove(obj)
+                for group in self.selected_groups:
+                    for obj in group.objects:
+                        self.particles.emit(obj.bbox[:2], obj.color, 10)
+                    if group in self.groups:
+                        self.groups.remove(group)
+                self.clear_selection()
+                self.left_pinching = False
+            
+            else:
+                if self.left_pinching and self.move_mode:
+                    self.end_move()
+                self.left_pinching = False
+                self.move_mode = False
+                self.resize_mode = False
+    
+    def cycle_brush(self):
+        brushes = list(self.brush_customizer.brushes.keys())
+        current_idx = brushes.index(self.brush_customizer.current_brush)
+        self.brush_customizer.current_brush = brushes[(current_idx + 1) % len(brushes)]
+    
+    def handle_ui_action(self, action):
+        if action == "draw":
+            self.mode = "draw"
+        elif action == "select":
+            self.mode = "select"
+        elif action == "group":
+            self.group_selected()
+        elif action == "ungroup":
+            self.ungroup_selected()
+        elif action == "copy":
+            self.copy_selected()
+        elif action == "paste":
+            self.paste_copied()
+        elif action == "save":
+            self.project_manager.save_project(self.objects, self.groups)
+        elif action == "load":
+            projects = self.project_manager.list_projects()
+            if projects:
+                self.objects, self.groups = self.project_manager.load_project(projects[0]['path'])
+        elif action == "clear":
+            self.objects.clear()
+            self.groups.clear()
+            self.clear_selection()
+        elif action == "brushes":
+            self.cycle_brush()
+    
+    def run(self):
+        while self.cap.isOpened():
+            frame_start = time.time()
+            
+            ret, frame = self.cap.read()
+            if not ret:
+                break
+            
+            frame = cv2.flip(frame, 1)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            canvas = np.zeros((self.config.HEIGHT, self.config.WIDTH, 3), dtype=np.uint8)
+            
+            timestamp = int(time.time() * 1000)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+            result = self.detector.detect_for_video(mp_image, timestamp)
+            
+            self.process_hands(result)
+            self.project_manager.check_autosave(self.objects, self.groups)
+            
+            for obj in self.objects:
+                obj.draw(canvas, moving=(obj in self.selected_objects and self.move_mode))
+            
+            for group in self.groups:
+                group.draw(canvas, moving=(group in self.selected_groups and self.move_mode))
+            
+            self.draw_move_feedback(canvas)
+            
+            if self.is_drawing and len(self.current_stroke) > 1:
+                pts = self.current_stroke
+                brush = self.brush_customizer.brushes[self.brush_customizer.current_brush]
+                for i in range(len(pts) - 1):
+                    self.brush_customizer.draw_pattern(
+                        canvas, pts[i], pts[i+1],
+                        self.active_color, brush['thickness'], brush['pattern']
+                    )
+            
+            if result.hand_landmarks:
+                for i, landmarks in enumerate(result.hand_landmarks):
+                    is_right = result.handedness[i][0].category_name == "Right"
+                    self.draw_hand_landmarks(canvas, landmarks, is_right)
+            
+            self.particles.update()
+            self.particles.draw(canvas)
+            
+            if self.drawing_requested and not self.is_drawing and self.right_prev:
+                hold_time = time.time() - self.drawing_start_time
+                progress = min(hold_time / self.config.DRAW_HOLD_TIME, 1.0)
+                
+                cv2.circle(canvas, self.right_prev, 35, (100, 100, 100), 3, cv2.LINE_AA)
+                cv2.circle(canvas, self.right_prev, int(35 * progress), self.active_color, -1, cv2.LINE_AA)
+            
+            if self.move_mode:
+                cv2.putText(canvas, "🔵 MOVE MODE", (10, self.config.HEIGHT-30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            elif self.resize_mode:
+                cv2.putText(canvas, "🔴 RESIZE MODE", (10, self.config.HEIGHT-30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
+            self.frame_count += 1
+            if self.frame_count % 10 == 0:
+                current_time = time.time()
+                self.fps = 10 / (current_time - self.last_time)
+                self.last_time = current_time
+                self.ui.fps_history.append(self.fps)
+            
+            avg_fps = np.mean(self.ui.fps_history) if self.ui.fps_history else self.fps
+            selected_count = len(self.selected_objects) + len(self.selected_groups)
+            self.ui.draw(canvas, self.active_color, avg_fps, self.mode, 
+                        self.brush_customizer.brushes[self.brush_customizer.current_brush]['name'],
+                        selected_count)
+            
+            cv2.imshow("Professional AirCanvas", canvas)
+            cv2.setWindowProperty("Professional AirCanvas", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            
+            frame_time = time.time() - frame_start
+            sleep_time = max(0, self.config.FRAME_TIME - frame_time)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27:
+                break
+            elif key == ord('g'):
+                self.group_selected()
+            elif key == ord('u'):
+                self.ungroup_selected()
+            elif key == ord('c'):
+                self.copy_selected()
+            elif key == ord('v'):
+                self.paste_copied()
+            elif key == ord('s'):
+                self.project_manager.save_project(self.objects, self.groups)
+            elif key == ord('l'):
+                projects = self.project_manager.list_projects()
+                if projects:
+                    self.objects, self.groups = self.project_manager.load_project(projects[0]['path'])
+            elif key == ord('d'):
+                for obj in self.selected_objects:
+                    if obj in self.objects:
+                        self.objects.remove(obj)
+                for group in self.selected_groups:
+                    if group in self.groups:
+                        self.groups.remove(group)
+                self.clear_selection()
+        
+        self.cap.release()
+        cv2.destroyAllWindows()
+        if hasattr(self, 'detector'):
+            self.detector.close()
+
+if __name__ == "__main__":
+    try:
+        app = ProfessionalAirCanvas()
+        app.run()
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        input("\nPress Enter to exit...")
