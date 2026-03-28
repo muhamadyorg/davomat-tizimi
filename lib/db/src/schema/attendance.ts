@@ -15,6 +15,7 @@ export const attendanceTable = pgTable("attendance", {
   earlyLeaveMinutes: integer("early_leave_minutes").notNull().default(0),
   workHours: real("work_hours").notNull().default(0),
   note: text("note"),
+  editCount: integer("edit_count").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

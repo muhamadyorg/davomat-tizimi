@@ -1,131 +1,291 @@
-import React, { useState } from "react";
-import { useListAttendance, useListDepartments } from "@workspace/api-client-react";
-import { useAuth } from "@/lib/auth";
-import { format } from "date-fns";
-import { Search, Filter, Calendar as CalIcon, Download } from "lucide-react";
-import { formatTime, getStatusColor } from "@/lib/utils";
+import React, { useState, useEffect, useCallback } from "react";
+import { useListDepartments } from "@workspace/api-client-react";
+import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, eachDayOfInterval, parseISO } from "date-fns";
+import { Calendar, Building2, Users, ChevronLeft, ChevronRight, Info } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-export default function AttendanceList() {
-  const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [departmentId, setDepartmentId] = useState<number | undefined>();
-  
-  const { data: records, isLoading } = useListAttendance({ date, departmentId });
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+type Tab = "kunlik" | "haftalik" | "oyunchi" | "oylik";
+type StatusType = "present" | "absent" | "late" | "on_leave" | "early_leave";
+
+const STATUS_CELL: Record<StatusType, { emoji: string; label: string; cls: string }> = {
+  present:     { emoji: "✓", label: "Keldi",      cls: "bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300" },
+  late:        { emoji: "K", label: "Kech keldi", cls: "bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-300" },
+  absent:      { emoji: "✗", label: "Kelmadi",    cls: "bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300" },
+  on_leave:    { emoji: "T", label: "Ta'tilda",   cls: "bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300" },
+  early_leave: { emoji: "E", label: "Erta ketdi", cls: "bg-yellow-100 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-300" },
+};
+
+interface Emp { id: number; firstName: string; lastName: string; departmentId: number | null; departmentName: string | null; role: string; }
+interface AttRec { id: number; userId: number; date: string; status: StatusType; checkIn: string | null; checkOut: string | null; workHours: number; note: string | null; }
+
+function getDateRange(tab: Tab, anchor: Date): { start: Date; end: Date; label: string } {
+  switch (tab) {
+    case "kunlik":
+      return { start: anchor, end: anchor, label: format(anchor, "d MMMM yyyy") };
+    case "haftalik": {
+      const s = startOfWeek(anchor, { weekStartsOn: 1 });
+      const e = endOfWeek(anchor, { weekStartsOn: 1 });
+      return { start: s, end: e, label: `${format(s, "d MMM")} – ${format(e, "d MMM yyyy")}` };
+    }
+    case "oyunchi": {
+      const s = subDays(anchor, 14);
+      return { start: s, end: anchor, label: `${format(s, "d MMM")} – ${format(anchor, "d MMM yyyy")}` };
+    }
+    case "oylik": {
+      const s = startOfMonth(anchor);
+      const e = endOfMonth(anchor);
+      return { start: s, end: e, label: format(anchor, "MMMM yyyy") };
+    }
+  }
+}
+
+function DayCell({ rec, date }: { rec?: AttRec; date: Date }) {
+  const [tooltip, setTooltip] = useState(false);
+  if (!rec) return (
+    <td className="p-0.5">
+      <div className="w-8 h-8 rounded-md bg-muted/30 text-muted-foreground/30 flex items-center justify-center text-xs">–</div>
+    </td>
+  );
+  const s = STATUS_CELL[rec.status];
+  const time = rec.checkIn ? format(new Date(rec.checkIn), "HH:mm") : "";
+  return (
+    <td className="p-0.5 relative">
+      <button
+        onMouseEnter={() => setTooltip(true)} onMouseLeave={() => setTooltip(false)}
+        onClick={() => setTooltip(p => !p)}
+        className={cn("w-8 h-8 rounded-md flex items-center justify-center text-xs font-bold transition-all hover:scale-110", s.cls)}
+      >
+        {s.emoji}
+      </button>
+      {tooltip && (
+        <div className="absolute z-20 bottom-full left-1/2 -translate-x-1/2 mb-2 bg-card border border-border rounded-xl shadow-xl p-3 min-w-[160px] text-left pointer-events-none">
+          <div className={cn("text-xs font-bold mb-1", s.cls.split(" ").pop())}>{s.label}</div>
+          {time && <div className="text-[11px] text-muted-foreground font-mono">Keldi: {time}</div>}
+          {rec.checkOut && <div className="text-[11px] text-muted-foreground font-mono">Ketdi: {format(new Date(rec.checkOut), "HH:mm")}</div>}
+          {rec.workHours > 0 && <div className="text-[11px] text-muted-foreground">{rec.workHours.toFixed(1)} soat</div>}
+          {rec.note && (
+            <div className="mt-1.5 pt-1.5 border-t border-border text-[11px] text-foreground italic">"{rec.note}"</div>
+          )}
+        </div>
+      )}
+    </td>
+  );
+}
+
+export default function AttendanceHistory() {
   const { data: departments } = useListDepartments();
+  const [tab, setTab] = useState<Tab>("kunlik");
+  const [anchor, setAnchor] = useState(new Date());
+  const [dept, setDept] = useState("");
+  const [empFilter, setEmpFilter] = useState("");
+  const [employees, setEmployees] = useState<Emp[]>([]);
+  const [records, setRecords] = useState<AttRec[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const { start, end, label } = getDateRange(tab, anchor);
+  const days = eachDayOfInterval({ start, end });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const p = new URLSearchParams({ startDate: format(start, "yyyy-MM-dd"), endDate: format(end, "yyyy-MM-dd") });
+      if (dept) p.set("departmentId", dept);
+      const res = await fetch(`${BASE}/api/attendance/range?${p}`, { credentials: "include" });
+      if (!res.ok) return;
+      const data = await res.json();
+      setEmployees(Array.isArray(data.employees) ? data.employees : []);
+      setRecords(Array.isArray(data.records) ? data.records : []);
+    } finally {
+      setLoading(false);
+    }
+  }, [tab, anchor, dept]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const recMap = new Map<string, AttRec>();
+  records.forEach(r => recMap.set(`${r.userId}_${r.date}`, r));
+
+  const filteredEmps = employees.filter(e => {
+    if (empFilter) {
+      const name = `${e.firstName} ${e.lastName}`.toLowerCase();
+      if (!name.includes(empFilter.toLowerCase())) return false;
+    }
+    return true;
+  });
+
+  const grouped: Record<string, Emp[]> = {};
+  filteredEmps.forEach(e => {
+    const d = e.departmentName || "Bo'limsiz";
+    if (!grouped[d]) grouped[d] = [];
+    grouped[d].push(e);
+  });
+
+  const navPrev = () => {
+    const d = new Date(anchor);
+    if (tab === "kunlik") d.setDate(d.getDate() - 1);
+    else if (tab === "haftalik") d.setDate(d.getDate() - 7);
+    else if (tab === "oyunchi") d.setDate(d.getDate() - 15);
+    else d.setMonth(d.getMonth() - 1);
+    setAnchor(d);
+  };
+  const navNext = () => {
+    const d = new Date(anchor);
+    if (tab === "kunlik") d.setDate(d.getDate() + 1);
+    else if (tab === "haftalik") d.setDate(d.getDate() + 7);
+    else if (tab === "oyunchi") d.setDate(d.getDate() + 15);
+    else d.setMonth(d.getMonth() + 1);
+    setAnchor(d);
+  };
+
+  const TABS: { id: Tab; label: string }[] = [
+    { id: "kunlik", label: "Kunlik" },
+    { id: "haftalik", label: "Haftalik" },
+    { id: "oyunchi", label: "15 kunlik" },
+    { id: "oylik", label: "Oylik" },
+  ];
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-foreground font-display">Attendance Records</h1>
-          <p className="text-muted-foreground mt-1">View and manage daily attendance.</p>
-        </div>
-        <button className="px-4 py-2 bg-background border border-border rounded-xl shadow-sm text-foreground font-medium flex items-center gap-2 hover:bg-muted transition-colors">
-          <Download className="w-4 h-4" /> Export
-        </button>
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-2xl font-bold text-foreground font-display">Davomat tarixi</h1>
+        <p className="text-muted-foreground text-sm mt-0.5">Xodimlarning davomat statistikasi</p>
       </div>
 
-      <div className="bg-card rounded-2xl border border-border/50 shadow-sm p-4 flex flex-col md:flex-row gap-4 items-end md:items-center">
-        <div className="flex-1 w-full space-y-1">
-          <label className="text-xs font-semibold text-muted-foreground uppercase ml-1">Date</label>
-          <div className="relative">
-            <CalIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <input 
-              type="date" 
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary text-sm font-medium"
-            />
-          </div>
+      {/* Tabs */}
+      <div className="flex gap-1 bg-muted p-1 rounded-xl w-fit">
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={cn("px-4 py-1.5 rounded-lg text-sm font-semibold transition-all",
+              tab === t.id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+            )}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div className="bg-card border border-border/50 rounded-2xl p-4 flex flex-wrap gap-3 items-center shadow-sm">
+        {/* Period nav */}
+        <div className="flex items-center gap-2 bg-muted rounded-lg p-1">
+          <button onClick={navPrev} className="p-1.5 text-muted-foreground hover:text-foreground rounded-md transition-colors">
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <span className="text-sm font-semibold text-foreground px-2 min-w-[180px] text-center">{label}</span>
+          <button onClick={navNext} className="p-1.5 text-muted-foreground hover:text-foreground rounded-md transition-colors">
+            <ChevronRight className="w-4 h-4" />
+          </button>
         </div>
 
-        <div className="flex-1 w-full space-y-1">
-          <label className="text-xs font-semibold text-muted-foreground uppercase ml-1">Department</label>
+        <div className="flex-1 min-w-[150px]">
           <div className="relative">
-            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <select
-              value={departmentId || ""}
-              onChange={(e) => setDepartmentId(e.target.value ? Number(e.target.value) : undefined)}
-              className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary text-sm font-medium appearance-none"
-            >
-              <option value="">All Departments</option>
-              {departments?.map(d => (
-                <option key={d.id} value={d.id}>{d.name}</option>
-              ))}
+            <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <select value={dept} onChange={e => setDept(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-background border border-border rounded-lg text-sm font-medium appearance-none">
+              <option value="">Barcha bo'limlar</option>
+              {departments?.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           </div>
         </div>
-        
-        <div className="flex-1 w-full md:max-w-xs space-y-1">
-          <label className="text-xs font-semibold text-muted-foreground uppercase ml-1">Search</label>
+
+        <div className="flex-1 min-w-[150px]">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <input 
-              type="text" 
-              placeholder="Search employee..."
-              className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary text-sm"
-            />
+            <Users className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input type="text" value={empFilter} onChange={e => setEmpFilter(e.target.value)}
+              placeholder="Xodim qidiring..."
+              className="w-full pl-9 pr-3 py-2 bg-background border border-border rounded-lg text-sm" />
           </div>
+        </div>
+
+        {/* Legend */}
+        <div className="flex gap-2 flex-wrap">
+          {Object.entries(STATUS_CELL).filter(([k]) => k !== "early_leave").map(([, v]) => (
+            <span key={v.label} className={cn("text-[10px] font-bold px-2 py-0.5 rounded-md", v.cls)}>
+              {v.emoji} {v.label}
+            </span>
+          ))}
         </div>
       </div>
 
-      <div className="bg-card border border-border/50 rounded-2xl shadow-sm overflow-hidden flex flex-col">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-muted/50 border-b border-border/50">
-                <th className="px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">Employee</th>
-                <th className="px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">Status</th>
-                <th className="px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">Check In</th>
-                <th className="px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">Check Out</th>
-                <th className="px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">Hours</th>
-                <th className="px-6 py-4 text-xs font-bold text-muted-foreground uppercase tracking-wider">Notes</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/50">
-              {isLoading ? (
-                <tr>
-                  <td colSpan={6} className="p-8 text-center text-muted-foreground">Loading...</td>
-                </tr>
-              ) : !records?.length ? (
-                <tr>
-                  <td colSpan={6} className="p-12 text-center text-muted-foreground">
-                    No attendance records found for this date.
-                  </td>
-                </tr>
-              ) : (
-                records.map((record) => (
-                  <tr key={record.id} className="hover:bg-muted/30 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs shrink-0">
-                          {record.userFullName.charAt(0)}
-                        </div>
-                        <div>
-                          <div className="font-semibold text-sm text-foreground">{record.userFullName}</div>
-                          <div className="text-xs text-muted-foreground">{record.departmentName || '-'}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-block px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${getStatusColor(record.status)}`}>
-                        {record.status.replace('_', ' ')}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 font-mono text-sm">{formatTime(record.checkIn)}</td>
-                    <td className="px-6 py-4 font-mono text-sm">{formatTime(record.checkOut)}</td>
-                    <td className="px-6 py-4">
-                      <span className="font-medium text-sm">{record.workHours > 0 ? `${record.workHours.toFixed(1)}h` : '-'}</span>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-muted-foreground truncate max-w-[150px]">
-                      {record.note || '-'}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+      {/* Grid */}
+      {loading ? (
+        <div className="space-y-2">
+          {[...Array(4)].map((_, i) => <div key={i} className="h-12 bg-card animate-pulse rounded-xl border border-border/50" />)}
         </div>
-      </div>
+      ) : (
+        <div className="space-y-5">
+          {Object.entries(grouped).map(([deptName, emps]) => (
+            <div key={deptName} className="bg-card border border-border/50 rounded-2xl shadow-sm overflow-hidden">
+              <div className="flex items-center gap-2 px-5 py-3 bg-muted/40 border-b border-border/50">
+                <Building2 className="w-4 h-4 text-primary" />
+                <span className="font-bold text-sm">{deptName}</span>
+                <span className="ml-auto text-xs text-muted-foreground">{emps.length} xodim</span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-border/30">
+                      <th className="px-4 py-2 text-left text-xs font-bold text-muted-foreground sticky left-0 bg-card min-w-[160px]">Xodim</th>
+                      {days.map(d => (
+                        <th key={d.toISOString()} className="px-0.5 py-2 text-center min-w-[36px]">
+                          <div className={cn("text-[10px] font-bold",
+                            [0, 6].includes(d.getDay()) ? "text-muted-foreground/50" : "text-muted-foreground"
+                          )}>
+                            {format(d, "dd")}
+                          </div>
+                          <div className="text-[9px] text-muted-foreground/60">{["Yak","Du","Se","Ch","Pa","Ju","Sh"][d.getDay()]}</div>
+                        </th>
+                      ))}
+                      <th className="px-3 py-2 text-center text-xs font-bold text-muted-foreground min-w-[60px]">Jami</th>
+                      <th className="px-3 py-2 text-center text-xs font-bold text-muted-foreground min-w-[60px]">Soat</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/20">
+                    {emps.map(emp => {
+                      const empRecs = days.map(d => recMap.get(`${emp.id}_${format(d, "yyyy-MM-dd")}`));
+                      const presentDays = empRecs.filter(r => r && (r.status === "present" || r.status === "late")).length;
+                      const totalHours = empRecs.reduce((acc, r) => acc + (r?.workHours ?? 0), 0);
+                      return (
+                        <tr key={emp.id} className="hover:bg-muted/10 transition-colors">
+                          <td className="px-4 py-2 sticky left-0 bg-card">
+                            <div className="flex items-center gap-2">
+                              <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-[10px] shrink-0">
+                                {emp.firstName[0]}{emp.lastName[0]}
+                              </div>
+                              <span className="text-sm font-medium text-foreground whitespace-nowrap">
+                                {emp.firstName} {emp.lastName}
+                              </span>
+                            </div>
+                          </td>
+                          {days.map((d, i) => (
+                            <DayCell key={d.toISOString()} rec={empRecs[i]} date={d} />
+                          ))}
+                          <td className="px-3 py-2 text-center">
+                            <span className="text-sm font-bold text-foreground">{presentDays}</span>
+                            <span className="text-xs text-muted-foreground">/{days.length}</span>
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            <span className="text-xs font-medium text-muted-foreground">{totalHours.toFixed(0)}h</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+
+          {filteredEmps.length === 0 && (
+            <div className="bg-card border border-border/50 rounded-2xl p-12 text-center">
+              <Info className="w-12 h-12 text-muted-foreground/20 mx-auto mb-3" />
+              <p className="text-muted-foreground">Bu davr uchun ma'lumot topilmadi</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

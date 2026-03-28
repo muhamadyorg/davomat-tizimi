@@ -1,81 +1,122 @@
 import React, { useState } from "react";
-import { useGetReportSummary } from "@workspace/api-client-react";
-import { format, subDays } from "date-fns";
-import { FileBarChart, Calendar as CalIcon, Download } from "lucide-react";
+import { format, startOfMonth, endOfMonth } from "date-fns";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { BarChart3, Calendar, Building2 } from "lucide-react";
+import { useListDepartments } from "@workspace/api-client-react";
+
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+const COLORS = ["hsl(142 76% 36%)", "hsl(0 84% 60%)", "hsl(38 92% 50%)", "hsl(221 83% 53%)"];
+const STATUS_UZ: Record<string, string> = {
+  present: "Keldi", absent: "Kelmadi", late: "Kech keldi", on_leave: "Ta'tilda"
+};
 
 export default function Reports() {
-  const [startDate, setStartDate] = useState(format(subDays(new Date(), 30), 'yyyy-MM-dd'));
-  const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const { data: departments } = useListDepartments();
+  const [month, setMonth] = useState(format(new Date(), "yyyy-MM"));
+  const [dept, setDept] = useState("");
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
 
-  const { data: summary, isLoading } = useGetReportSummary({ startDate, endDate });
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const [year, m] = month.split("-");
+      const start = format(startOfMonth(new Date(Number(year), Number(m) - 1)), "yyyy-MM-dd");
+      const end = format(endOfMonth(new Date(Number(year), Number(m) - 1)), "yyyy-MM-dd");
+      const p = new URLSearchParams({ startDate: start, endDate: end });
+      if (dept) p.set("departmentId", dept);
+      const res = await fetch(`${BASE}/api/attendance/range?${p}`, { credentials: "include" });
+      const rangeData = await res.json();
+      setData(rangeData);
+    } finally {
+      setLoading(false);
+    }
+  }, [month, dept]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const statusCounts = React.useMemo(() => {
+    if (!data?.records) return [];
+    const counts: Record<string, number> = { present: 0, absent: 0, late: 0, on_leave: 0 };
+    data.records.forEach((r: any) => {
+      if (r.status in counts) counts[r.status]++;
+    });
+    return Object.entries(counts).map(([k, v]) => ({ name: STATUS_UZ[k] || k, value: v }));
+  }, [data]);
+
+  const totalEmployees = data?.employees?.length || 0;
+  const totalPresent = statusCounts.find(s => s.name === STATUS_UZ.present)?.value || 0;
+  const totalAbsent = statusCounts.find(s => s.name === STATUS_UZ.absent)?.value || 0;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-foreground font-display">Analytics & Reports</h1>
-          <p className="text-muted-foreground mt-1">Comprehensive attendance statistics.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center bg-card border border-border/50 rounded-xl p-1 shadow-sm">
-            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-transparent border-none text-sm font-medium focus:ring-0 w-36" />
-            <span className="text-muted-foreground px-2">-</span>
-            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="bg-transparent border-none text-sm font-medium focus:ring-0 w-36" />
+      <div>
+        <h1 className="text-2xl font-bold text-foreground font-display">Hisobotlar</h1>
+        <p className="text-muted-foreground text-sm mt-0.5">Davomat tahlili va statistikasi</p>
+      </div>
+
+      <div className="bg-card border border-border/50 rounded-2xl p-4 flex flex-wrap gap-3 items-end shadow-sm">
+        <div className="space-y-1">
+          <label className="text-[11px] font-bold text-muted-foreground uppercase">Oy</label>
+          <div className="relative">
+            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input type="month" value={month} onChange={e => setMonth(e.target.value)}
+              className="pl-9 pr-3 py-2 bg-background border border-border rounded-lg text-sm font-medium" />
           </div>
-          <button className="p-2.5 bg-primary/10 text-primary rounded-xl hover:bg-primary hover:text-white transition-colors">
-            <Download className="w-5 h-5" />
-          </button>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[11px] font-bold text-muted-foreground uppercase">Bo'lim</label>
+          <div className="relative">
+            <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <select value={dept} onChange={e => setDept(e.target.value)}
+              className="pl-9 pr-8 py-2 bg-background border border-border rounded-lg text-sm font-medium appearance-none">
+              <option value="">Barcha bo'limlar</option>
+              {departments?.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </div>
         </div>
       </div>
 
-      {isLoading ? (
-        <div className="animate-pulse space-y-6">
-          <div className="grid grid-cols-4 gap-6">
-            {[...Array(4)].map((_, i) => <div key={i} className="h-32 bg-card rounded-2xl" />)}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {[
+          { label: "Jami xodimlar", val: totalEmployees, color: "text-primary" },
+          { label: "Kelganlar (jami)", val: totalPresent, color: "text-green-600 dark:text-green-400" },
+          { label: "Kelmadi (jami)", val: totalAbsent, color: "text-destructive" },
+        ].map(s => (
+          <div key={s.label} className="bg-card border border-border/50 rounded-2xl p-5 shadow-sm">
+            <p className="text-xs text-muted-foreground font-medium mb-1">{s.label}</p>
+            <p className={`text-3xl font-bold font-display ${s.color}`}>{s.val}</p>
           </div>
-          <div className="h-96 bg-card rounded-2xl" />
-        </div>
-      ) : summary ? (
-        <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
-            <StatCard title="Total Employees" value={summary.totalEmployees} />
-            <StatCard title="Overall Attendance" value={`${Math.round(summary.attendanceRate)}%`} highlight />
-            <StatCard title="Total Absences" value={summary.absentCount} />
-            <StatCard title="Avg Daily Hours" value={`${summary.avgWorkHours.toFixed(1)}h`} />
-          </div>
+        ))}
+      </div>
 
-          <div className="bg-card border border-border/50 rounded-2xl p-6 shadow-sm mt-6">
-            <h3 className="text-lg font-bold text-foreground mb-6 font-display">Department Breakdown</h3>
-            <div className="h-[400px] w-full">
+      {loading ? (
+        <div className="h-72 bg-card animate-pulse rounded-2xl border border-border/50" />
+      ) : (
+        <div className="bg-card border border-border/50 rounded-2xl p-6 shadow-sm">
+          <h3 className="font-bold text-foreground mb-5 font-display">Holat bo'yicha taqsimot</h3>
+          {statusCounts.length > 0 ? (
+            <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={summary.byDepartment} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
-                  <XAxis dataKey="departmentName" axisLine={false} tickLine={false} tick={{fill: 'hsl(var(--muted-foreground))'}} />
-                  <YAxis axisLine={false} tickLine={false} tick={{fill: 'hsl(var(--muted-foreground))'}} />
-                  <Tooltip 
-                    cursor={{fill: 'hsl(var(--muted)/0.5)'}}
-                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}
-                  />
-                  <Bar dataKey="attendanceRate" name="Attendance Rate %" radius={[6, 6, 0, 0]} maxBarSize={60}>
-                    {summary.byDepartment.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={`hsl(221, 83%, ${Math.max(40, 80 - index * 10)}%)`} />
-                    ))}
+                <BarChart data={statusCounts}>
+                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }} />
+                  <Tooltip contentStyle={{ borderRadius: 12, border: 'none', fontSize: 13 }} />
+                  <Bar dataKey="value" radius={[6, 6, 0, 0]} maxBarSize={60}>
+                    {statusCounts.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          </div>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-function StatCard({ title, value, highlight }: { title: string, value: any, highlight?: boolean }) {
-  return (
-    <div className={`bg-card border ${highlight ? 'border-primary shadow-primary/10' : 'border-border/50'} rounded-2xl p-6 shadow-sm`}>
-      <h4 className="text-muted-foreground text-sm font-medium mb-2">{title}</h4>
-      <span className={`text-3xl font-bold font-display ${highlight ? 'text-primary' : 'text-foreground'}`}>{value}</span>
+          ) : (
+            <div className="h-64 flex flex-col items-center justify-center text-muted-foreground">
+              <BarChart3 className="w-12 h-12 mb-3 opacity-20" />
+              <p className="text-sm">Bu oy uchun ma'lumot yo'q</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

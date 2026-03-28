@@ -2,391 +2,358 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useListDepartments } from "@workspace/api-client-react";
 import { useAuth } from "@/lib/auth";
 import { format } from "date-fns";
-import { Calendar, ChevronDown, Save, Check, AlertCircle, Clock, Users, Building2, RefreshCw } from "lucide-react";
+import { Calendar, Save, Check, Lock, AlertCircle, Building2, RefreshCw, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const BASE_URL = import.meta.env.BASE_URL.replace(/\/$/, "");
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-type AttendanceStatus = "present" | "absent" | "late" | "on_leave" | "early_leave";
+type Status = "present" | "absent" | "late" | "on_leave";
 
-interface Employee {
+const STATUSES: { value: Status; label: string; emoji: string; color: string; bg: string }[] = [
+  { value: "present",  label: "Keldi",       emoji: "✓", color: "text-green-700 dark:text-green-400",  bg: "bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/30" },
+  { value: "absent",   label: "Kelmadi",     emoji: "✗", color: "text-red-700 dark:text-red-400",    bg: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30" },
+  { value: "on_leave", label: "Ta'tilda",    emoji: "T", color: "text-blue-700 dark:text-blue-400",   bg: "bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/30" },
+  { value: "late",     label: "Kech keldi",  emoji: "K", color: "text-orange-700 dark:text-orange-400", bg: "bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30" },
+];
+
+interface EmpRow {
   id: number;
   firstName: string;
   lastName: string;
-  departmentId: number | null;
   departmentName: string | null;
-  shiftName: string | null;
   shiftStartTime: string | null;
   shiftEndTime: string | null;
-  position: string | null;
   role: string;
 }
 
-interface AttendanceRecord {
+interface AttRec {
   id: number;
+  status: Status;
   checkIn: string | null;
   checkOut: string | null;
-  status: AttendanceStatus;
   note: string | null;
-  lateMinutes: number;
-  workHours: number;
-}
-
-interface DailyEntry {
-  employee: Employee;
-  attendance: AttendanceRecord | null;
+  editCount: number;
 }
 
 interface RowState {
-  status: AttendanceStatus;
+  status: Status;
   checkIn: string;
   checkOut: string;
   note: string;
   saving: boolean;
   saved: boolean;
+  locked: boolean;
   error: string;
-  dirty: boolean;
+  attId: number | null;
 }
 
-const STATUS_OPTIONS: { value: AttendanceStatus; label: string; color: string }[] = [
-  { value: "present",     label: "Keldi",         color: "text-green-600 bg-green-50 border-green-200" },
-  { value: "absent",      label: "Kelmadi",       color: "text-red-600 bg-red-50 border-red-200" },
-  { value: "late",        label: "Kech keldi",    color: "text-orange-600 bg-orange-50 border-orange-200" },
-  { value: "on_leave",    label: "Ta'tilda",      color: "text-blue-600 bg-blue-50 border-blue-200" },
-  { value: "early_leave", label: "Erta ketdi",    color: "text-yellow-600 bg-yellow-50 border-yellow-200" },
-];
-
-function getStatusStyle(status: AttendanceStatus) {
-  return STATUS_OPTIONS.find(s => s.value === status)?.color || "text-muted-foreground bg-muted border-border";
-}
-
-export default function AttendanceMarkingPage() {
+export default function AttendanceMark() {
   const { user } = useAuth();
   const { data: departments } = useListDepartments();
   const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
-  const [deptFilter, setDeptFilter] = useState<string>("");
-  const [entries, setEntries] = useState<DailyEntry[]>([]);
+  const [dept, setDept] = useState("");
+  const [entries, setEntries] = useState<{ employee: EmpRow; attendance: AttRec | null }[]>([]);
   const [rows, setRows] = useState<Record<number, RowState>>({});
   const [loading, setLoading] = useState(false);
-  const [saveAllLoading, setSaveAllLoading] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [savingAll, setSavingAll] = useState(false);
+  const [savingNote, setSavingNote] = useState<Record<number, boolean>>({});
 
-  const fetchDaily = useCallback(async () => {
+  const isSuperAdmin = user?.role === "superadmin";
+  const maxEdits = isSuperAdmin ? 2 : 1;
+
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ date });
-      if (deptFilter) params.set("departmentId", deptFilter);
-      const res = await fetch(`${BASE_URL}/api/attendance/daily?${params}`, { credentials: "include" });
-      const data: DailyEntry[] = await res.json();
+      const p = new URLSearchParams({ date });
+      if (dept) p.set("departmentId", dept);
+      const res = await fetch(`${BASE}/api/attendance/daily?${p}`, { credentials: "include" });
+      if (!res.ok) return;
+      const data: { employee: EmpRow; attendance: AttRec | null }[] = await res.json();
+      if (!Array.isArray(data)) return;
       setEntries(data);
 
-      const initialRows: Record<number, RowState> = {};
-      data.forEach(({ employee, attendance }) => {
-        const ci = attendance?.checkIn ? format(new Date(attendance.checkIn), "HH:mm") : "";
-        const co = attendance?.checkOut ? format(new Date(attendance.checkOut), "HH:mm") : "";
-        initialRows[employee.id] = {
-          status: attendance?.status || "absent",
-          checkIn: ci,
-          checkOut: co,
-          note: attendance?.note || "",
-          saving: false,
-          saved: false,
-          error: "",
-          dirty: false,
+      const init: Record<number, RowState> = {};
+      data.forEach(({ employee, attendance: att }) => {
+        const ci = att?.checkIn ? format(new Date(att.checkIn), "HH:mm") : "";
+        const co = att?.checkOut ? format(new Date(att.checkOut), "HH:mm") : "";
+        const edits = att?.editCount ?? 0;
+        const locked = att ? edits >= maxEdits : false;
+        init[employee.id] = {
+          status: att?.status ?? "absent",
+          checkIn: ci, checkOut: co,
+          note: att?.note ?? "",
+          saving: false, saved: !!att, locked,
+          error: "", attId: att?.id ?? null,
         };
       });
-      setRows(initialRows);
-    } catch (e) {
-      console.error(e);
+      setRows(init);
     } finally {
       setLoading(false);
     }
-  }, [date, deptFilter]);
+  }, [date, dept, maxEdits]);
 
-  useEffect(() => { fetchDaily(); }, [fetchDaily]);
+  useEffect(() => { load(); }, [load]);
 
-  const updateRow = (employeeId: number, field: keyof RowState, value: any) => {
-    setRows(prev => ({
-      ...prev,
-      [employeeId]: { ...prev[employeeId], [field]: value, dirty: true, saved: false, error: "" }
-    }));
+  const updateRow = (id: number, field: keyof RowState, val: any) => {
+    setRows(p => ({ ...p, [id]: { ...p[id], [field]: val, error: "" } }));
   };
 
-  const saveRow = async (employeeId: number) => {
-    const row = rows[employeeId];
-    setRows(prev => ({ ...prev, [employeeId]: { ...prev[employeeId], saving: true, error: "" } }));
+  const saveOne = async (empId: number): Promise<boolean> => {
+    const row = rows[empId];
+    if (row.locked) return true;
+    setRows(p => ({ ...p, [empId]: { ...p[empId], saving: true, error: "" } }));
     try {
-      const res = await fetch(`${BASE_URL}/api/attendance/mark`, {
-        method: "POST",
-        credentials: "include",
+      const res = await fetch(`${BASE}/api/attendance/mark`, {
+        method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: employeeId,
-          date,
+          userId: empId, date,
           status: row.status,
           checkIn: row.checkIn || null,
           checkOut: row.checkOut || null,
           note: row.note || null,
         }),
       });
+      const data = await res.json();
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || "Xatolik");
+        setRows(p => ({ ...p, [empId]: { ...p[empId], saving: false, error: data.message || "Xatolik" } }));
+        return false;
       }
-      setRows(prev => ({ ...prev, [employeeId]: { ...prev[employeeId], saving: false, saved: true, dirty: false } }));
-    } catch (e: any) {
-      setRows(prev => ({ ...prev, [employeeId]: { ...prev[employeeId], saving: false, error: e.message } }));
+      const locked = (data.editCount ?? 0) >= maxEdits;
+      setRows(p => ({ ...p, [empId]: { ...p[empId], saving: false, saved: true, locked, attId: data.id } }));
+      return true;
+    } catch {
+      setRows(p => ({ ...p, [empId]: { ...p[empId], saving: false, error: "Xatolik" } }));
+      return false;
+    }
+  };
+
+  const saveNoteOnly = async (empId: number) => {
+    const row = rows[empId];
+    if (!row.attId) return;
+    setSavingNote(p => ({ ...p, [empId]: true }));
+    try {
+      await fetch(`${BASE}/api/attendance/note/${row.attId}`, {
+        method: "PATCH", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: row.note || null }),
+      });
+    } finally {
+      setSavingNote(p => ({ ...p, [empId]: false }));
     }
   };
 
   const saveAll = async () => {
-    setSaveAllLoading(true);
-    const dirtyIds = Object.entries(rows)
-      .filter(([, row]) => row.dirty || !entries.find(e => e.employee.id === Number(entries[0]?.employee.id) )?.attendance)
-      .map(([id]) => Number(id));
-
-    const allIds = entries.map(e => e.employee.id);
-    for (const id of allIds) {
-      await saveRow(id);
+    setSavingAll(true);
+    setConfirmOpen(false);
+    const ids = entries.map(e => e.employee.id);
+    for (const id of ids) {
+      if (!rows[id]?.locked) await saveOne(id);
     }
-    setSaveAllLoading(false);
+    setSavingAll(false);
   };
 
   // Group by department
-  const grouped: Record<string, DailyEntry[]> = {};
-  entries.forEach(entry => {
-    const deptName = entry.employee.departmentName || "Bo'limsiz";
-    if (!grouped[deptName]) grouped[deptName] = [];
-    grouped[deptName].push(entry);
+  const grouped: Record<string, typeof entries> = {};
+  entries.forEach(e => {
+    const d = e.employee.departmentName || "Bo'limsiz";
+    if (!grouped[d]) grouped[d] = [];
+    grouped[d].push(e);
   });
 
-  const markedCount = Object.values(rows).filter(r => r.saved || r.status !== "absent").length;
-  const totalCount = entries.length;
+  const presentCount = Object.values(rows).filter(r => r.status === "present" || r.status === "late").length;
+  const absentCount = Object.values(rows).filter(r => r.status === "absent").length;
+  const leaveCount = Object.values(rows).filter(r => r.status === "on_leave").length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-foreground font-display">Davomat belgilash</h1>
-          <p className="text-muted-foreground mt-1">
-            Xodimlarning kunlik davomatini jadval ko'rinishida belgilang.
-          </p>
+          <h1 className="text-2xl font-bold text-foreground font-display">Davomat belgilash</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">Sana bo'yicha xodimlar davomatini belgilang</p>
         </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={fetchDaily}
-            className="p-2.5 bg-muted text-muted-foreground rounded-xl hover:text-foreground transition-colors"
-            title="Yangilash"
-          >
+        <div className="flex gap-2">
+          <button onClick={load} className="p-2 bg-muted text-muted-foreground rounded-xl hover:text-foreground transition-colors" title="Yangilash">
             <RefreshCw className="w-4 h-4" />
           </button>
           <button
-            onClick={saveAll}
-            disabled={saveAllLoading}
-            className="px-5 py-2.5 bg-primary text-white rounded-xl font-semibold shadow-lg shadow-primary/25 flex items-center gap-2 hover:bg-primary/90 transition-all disabled:opacity-50"
+            onClick={() => setConfirmOpen(true)}
+            disabled={savingAll || entries.every(e => rows[e.employee.id]?.locked)}
+            className="px-5 py-2 bg-primary text-white rounded-xl font-semibold shadow-md shadow-primary/20 flex items-center gap-2 hover:bg-primary/90 transition-all disabled:opacity-40 text-sm"
           >
             <Save className="w-4 h-4" />
-            {saveAllLoading ? "Saqlanmoqda..." : "Hammasini saqlash"}
+            {savingAll ? "Saqlanmoqda..." : "Hammasini saqlash"}
           </button>
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="bg-card border border-border/50 rounded-2xl p-4 flex flex-col sm:flex-row gap-4 shadow-sm">
-        <div className="flex-1 space-y-1">
-          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider ml-1">Sana</label>
+      {/* Filters + Stats */}
+      <div className="bg-card border border-border/50 rounded-2xl p-4 flex flex-wrap gap-3 items-end shadow-sm">
+        <div className="flex-1 min-w-[140px] space-y-1">
+          <label className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Sana</label>
           <div className="relative">
             <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <input
-              type="date"
-              value={date}
-              onChange={e => setDate(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-xl text-sm font-medium focus:ring-2 focus:ring-primary/20 focus:border-primary"
-            />
+            <input type="date" value={date} onChange={e => setDate(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-background border border-border rounded-lg text-sm font-medium focus:ring-2 focus:ring-primary/20 focus:border-primary" />
           </div>
         </div>
-        <div className="flex-1 space-y-1">
-          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider ml-1">Bo'lim</label>
+        <div className="flex-1 min-w-[160px] space-y-1">
+          <label className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Bo'lim</label>
           <div className="relative">
             <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <select
-              value={deptFilter}
-              onChange={e => setDeptFilter(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 bg-background border border-border rounded-xl text-sm font-medium appearance-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-            >
+            <select value={dept} onChange={e => setDept(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-background border border-border rounded-lg text-sm font-medium appearance-none focus:ring-2 focus:ring-primary/20 focus:border-primary">
               <option value="">Barcha bo'limlar</option>
               {departments?.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           </div>
         </div>
-
-        {/* Summary */}
-        <div className="flex items-end gap-4 pb-0.5">
-          <div className="text-center px-4 py-2 bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 rounded-xl">
-            <div className="text-lg font-bold text-green-700 dark:text-green-400">
-              {Object.values(rows).filter(r => r.status === "present" || r.status === "late").length}
+        <div className="flex gap-2 items-center pb-0.5">
+          {[
+            { label: "Keldi", val: presentCount, color: "text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 border-green-100 dark:border-green-500/20" },
+            { label: "Kelmadi", val: absentCount, color: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 border-red-100 dark:border-red-500/20" },
+            { label: "Ta'til", val: leaveCount, color: "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 border-blue-100 dark:border-blue-500/20" },
+            { label: "Jami", val: entries.length, color: "text-foreground bg-muted border-border/50" },
+          ].map(s => (
+            <div key={s.label} className={cn("text-center px-3 py-1.5 rounded-lg border", s.color)}>
+              <div className="text-base font-bold">{s.val}</div>
+              <div className="text-[10px] font-semibold">{s.label}</div>
             </div>
-            <div className="text-xs text-green-600 dark:text-green-500 font-medium">Keldi</div>
-          </div>
-          <div className="text-center px-4 py-2 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-xl">
-            <div className="text-lg font-bold text-red-700 dark:text-red-400">
-              {Object.values(rows).filter(r => r.status === "absent").length}
-            </div>
-            <div className="text-xs text-red-600 dark:text-red-500 font-medium">Kelmadi</div>
-          </div>
-          <div className="text-center px-4 py-2 bg-muted border border-border/50 rounded-xl">
-            <div className="text-lg font-bold text-foreground">{totalCount}</div>
-            <div className="text-xs text-muted-foreground font-medium">Jami</div>
-          </div>
+          ))}
         </div>
       </div>
 
       {/* Table */}
       {loading ? (
-        <div className="space-y-3">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-16 bg-card animate-pulse rounded-2xl border border-border/50" />
-          ))}
+        <div className="space-y-2">
+          {[...Array(4)].map((_, i) => <div key={i} className="h-14 bg-card animate-pulse rounded-xl border border-border/50" />)}
         </div>
       ) : (
-        <div className="space-y-6">
-          {Object.entries(grouped).map(([deptName, deptEntries]) => (
+        <div className="space-y-5">
+          {Object.entries(grouped).map(([deptName, list]) => (
             <div key={deptName} className="bg-card border border-border/50 rounded-2xl shadow-sm overflow-hidden">
-              {/* Department Header */}
-              <div className="flex items-center gap-3 px-6 py-4 bg-muted/40 border-b border-border/50">
-                <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
-                  <Building2 className="w-4 h-4" />
-                </div>
-                <h3 className="font-bold text-foreground">{deptName}</h3>
-                <span className="ml-auto text-xs font-semibold text-muted-foreground bg-background px-2 py-1 rounded-md border border-border/50">
-                  {deptEntries.length} xodim
-                </span>
+              <div className="flex items-center gap-2 px-5 py-3 bg-muted/40 border-b border-border/50">
+                <Building2 className="w-4 h-4 text-primary" />
+                <span className="font-bold text-sm text-foreground">{deptName}</span>
+                <span className="ml-auto text-xs text-muted-foreground">{list.length} xodim</span>
               </div>
 
-              {/* Table */}
               <div className="overflow-x-auto">
-                <table className="w-full">
+                <table className="w-full min-w-[700px]">
                   <thead>
-                    <tr className="border-b border-border/30">
-                      <th className="px-4 py-3 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider w-[220px]">
-                        Xodim
-                      </th>
-                      <th className="px-3 py-3 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider w-[160px]">
-                        Holat
-                      </th>
-                      <th className="px-3 py-3 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider w-[120px]">
-                        Kelish
-                      </th>
-                      <th className="px-3 py-3 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider w-[120px]">
-                        Ketish
-                      </th>
-                      <th className="px-3 py-3 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider">
-                        Izoh
-                      </th>
-                      <th className="px-3 py-3 text-center text-xs font-bold text-muted-foreground uppercase tracking-wider w-[90px]">
-                        Amal
-                      </th>
+                    <tr className="border-b border-border/30 text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
+                      <th className="px-4 py-2.5 text-left w-[200px]">Xodim</th>
+                      <th className="px-3 py-2.5 text-left w-[180px]">Holat</th>
+                      <th className="px-3 py-2.5 text-left w-[110px]">Kelish</th>
+                      <th className="px-3 py-2.5 text-left w-[110px]">Ketish</th>
+                      <th className="px-3 py-2.5 text-left">Izoh</th>
+                      <th className="px-3 py-2.5 text-center w-[100px]">Amal</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-border/30">
-                    {deptEntries.map(({ employee }) => {
+                  <tbody className="divide-y divide-border/20">
+                    {list.map(({ employee }) => {
                       const row = rows[employee.id];
                       if (!row) return null;
-                      const statusOpt = STATUS_OPTIONS.find(s => s.value === row.status);
+                      const st = STATUSES.find(s => s.value === row.status)!;
+                      const noTime = row.status === "absent" || row.status === "on_leave";
 
                       return (
-                        <tr
-                          key={employee.id}
-                          className={cn(
-                            "transition-colors",
-                            row.saved ? "bg-green-50/50 dark:bg-green-500/5" : "hover:bg-muted/20"
-                          )}
-                        >
-                          {/* Employee */}
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs shrink-0">
+                        <tr key={employee.id} className={cn(
+                          "transition-colors",
+                          row.locked ? "bg-muted/30" : "hover:bg-muted/10"
+                        )}>
+                          {/* Name */}
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs shrink-0">
                                 {employee.firstName[0]}{employee.lastName[0]}
                               </div>
                               <div>
-                                <div className="font-semibold text-sm text-foreground">
+                                <div className="text-sm font-semibold text-foreground leading-tight">
                                   {employee.firstName} {employee.lastName}
                                 </div>
-                                <div className="text-xs text-muted-foreground">
-                                  {employee.shiftStartTime
-                                    ? `${employee.shiftStartTime.slice(0, 5)} – ${employee.shiftEndTime?.slice(0, 5)}`
-                                    : employee.position || "—"}
-                                </div>
+                                {employee.shiftStartTime && (
+                                  <div className="text-[10px] text-muted-foreground font-mono">
+                                    {employee.shiftStartTime.slice(0, 5)}–{employee.shiftEndTime?.slice(0, 5)}
+                                  </div>
+                                )}
                               </div>
+                              {row.locked && <Lock className="w-3 h-3 text-muted-foreground ml-1 shrink-0" />}
                             </div>
                           </td>
 
                           {/* Status */}
-                          <td className="px-3 py-3">
-                            <select
-                              value={row.status}
-                              onChange={e => updateRow(employee.id, "status", e.target.value as AttendanceStatus)}
-                              className={cn(
-                                "w-full px-2 py-1.5 rounded-lg border text-xs font-semibold appearance-none cursor-pointer focus:ring-2 focus:ring-primary/20 focus:outline-none",
-                                getStatusStyle(row.status)
-                              )}
-                            >
-                              {STATUS_OPTIONS.map(opt => (
-                                <option key={opt.value} value={opt.value}>{opt.label}</option>
-                              ))}
-                            </select>
+                          <td className="px-3 py-2.5">
+                            {row.locked ? (
+                              <span className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-semibold", st.bg, st.color)}>
+                                {st.emoji} {st.label}
+                              </span>
+                            ) : (
+                              <div className="flex gap-1">
+                                {STATUSES.map(s => (
+                                  <button
+                                    key={s.value}
+                                    onClick={() => updateRow(employee.id, "status", s.value)}
+                                    title={s.label}
+                                    className={cn(
+                                      "w-7 h-7 rounded-lg border text-xs font-bold transition-all",
+                                      row.status === s.value
+                                        ? cn(s.bg, s.color, "shadow-sm scale-105")
+                                        : "bg-muted/50 text-muted-foreground border-border/50 hover:border-primary/30"
+                                    )}
+                                  >
+                                    {s.emoji}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                           </td>
 
                           {/* Check-in */}
-                          <td className="px-3 py-3">
-                            <input
-                              type="time"
-                              value={row.checkIn}
-                              onChange={e => updateRow(employee.id, "checkIn", e.target.value)}
-                              disabled={row.status === "absent" || row.status === "on_leave"}
-                              className="w-full px-2 py-1.5 bg-background border border-border rounded-lg text-xs font-mono focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
-                            />
+                          <td className="px-3 py-2.5">
+                            <input type="time" value={row.checkIn} onChange={e => updateRow(employee.id, "checkIn", e.target.value)}
+                              disabled={row.locked || noTime}
+                              className="w-full px-2 py-1.5 bg-background border border-border rounded-lg text-xs font-mono focus:ring-2 focus:ring-primary/20 disabled:opacity-30 disabled:cursor-not-allowed" />
                           </td>
 
                           {/* Check-out */}
-                          <td className="px-3 py-3">
-                            <input
-                              type="time"
-                              value={row.checkOut}
-                              onChange={e => updateRow(employee.id, "checkOut", e.target.value)}
-                              disabled={row.status === "absent" || row.status === "on_leave"}
-                              className="w-full px-2 py-1.5 bg-background border border-border rounded-lg text-xs font-mono focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-40 disabled:cursor-not-allowed"
-                            />
+                          <td className="px-3 py-2.5">
+                            <input type="time" value={row.checkOut} onChange={e => updateRow(employee.id, "checkOut", e.target.value)}
+                              disabled={row.locked || noTime}
+                              className="w-full px-2 py-1.5 bg-background border border-border rounded-lg text-xs font-mono focus:ring-2 focus:ring-primary/20 disabled:opacity-30 disabled:cursor-not-allowed" />
                           </td>
 
-                          {/* Note */}
-                          <td className="px-3 py-3">
-                            <input
-                              type="text"
-                              value={row.note}
-                              onChange={e => updateRow(employee.id, "note", e.target.value)}
-                              placeholder="Izoh..."
-                              className="w-full px-2 py-1.5 bg-background border border-border rounded-lg text-xs focus:ring-2 focus:ring-primary/20 focus:border-primary"
-                            />
+                          {/* Note - always editable */}
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center gap-1">
+                              <input type="text" value={row.note} onChange={e => updateRow(employee.id, "note", e.target.value)}
+                                placeholder="Izoh..."
+                                className="flex-1 px-2 py-1.5 bg-background border border-border rounded-lg text-xs focus:ring-2 focus:ring-primary/20 min-w-0" />
+                              {row.locked && row.attId && (
+                                <button onClick={() => saveNoteOnly(employee.id)} disabled={savingNote[employee.id]}
+                                  className="shrink-0 px-2 py-1.5 bg-muted text-muted-foreground hover:text-foreground rounded-lg text-xs transition-colors disabled:opacity-50">
+                                  {savingNote[employee.id] ? "..." : "✓"}
+                                </button>
+                              )}
+                            </div>
                           </td>
 
                           {/* Action */}
-                          <td className="px-3 py-3 text-center">
-                            {row.error && (
-                              <div className="text-xs text-destructive mb-1 flex items-center gap-1">
-                                <AlertCircle className="w-3 h-3" /> {row.error}
-                              </div>
-                            )}
-                            {row.saved ? (
-                              <span className="inline-flex items-center gap-1 text-xs text-green-600 font-semibold">
-                                <Check className="w-4 h-4" /> Saqlandi
+                          <td className="px-3 py-2.5 text-center">
+                            {row.error && <div className="text-[10px] text-destructive mb-1 flex items-center gap-1 justify-center"><AlertCircle className="w-3 h-3" />{row.error}</div>}
+                            {row.locked ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground font-medium">
+                                <Lock className="w-3 h-3" /> Qulflangan
+                              </span>
+                            ) : row.saved ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] text-green-600 font-semibold">
+                                <Check className="w-3.5 h-3.5" /> Saqlandi
                               </span>
                             ) : (
-                              <button
-                                onClick={() => saveRow(employee.id)}
-                                disabled={row.saving}
-                                className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50 whitespace-nowrap"
-                              >
+                              <button onClick={() => saveOne(employee.id)} disabled={row.saving}
+                                className="px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50">
                                 {row.saving ? "..." : "Saqlash"}
                               </button>
                             )}
@@ -401,12 +368,41 @@ export default function AttendanceMarkingPage() {
           ))}
 
           {entries.length === 0 && (
-            <div className="bg-card border border-border/50 rounded-2xl p-16 text-center shadow-sm">
-              <Users className="w-16 h-16 text-muted-foreground/20 mx-auto mb-4" />
-              <p className="text-muted-foreground font-medium">Xodimlar topilmadi</p>
-              <p className="text-sm text-muted-foreground/60 mt-1">Avval xodimlarni tizimga qo'shing</p>
+            <div className="bg-card border border-border/50 rounded-2xl p-16 text-center">
+              <p className="text-muted-foreground">Xodimlar topilmadi. Avval xodim qo'shing.</p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Confirm Dialog */}
+      {confirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-card border border-border rounded-2xl shadow-2xl p-6 max-w-sm w-full">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
+                <AlertTriangle className="w-5 h-5 text-destructive" />
+              </div>
+              <div>
+                <h3 className="font-bold text-foreground">Tasdiqlaysizmi?</h3>
+                <p className="text-xs text-muted-foreground">Bu amalni ortga qaytarib bo'lmaydi</p>
+              </div>
+            </div>
+            <p className="text-sm text-muted-foreground mb-5">
+              Agar hozir "Saqlash"ni bossangiz, barcha xodimlar davomati belgilanadi va
+              {isSuperAdmin ? " faqat 1 marta yana tahrir qilish mumkin bo'ladi." : " qaytarib o'zgartirib bo'lmaydi."}
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmOpen(false)}
+                className="flex-1 py-2.5 bg-muted text-foreground rounded-xl font-semibold text-sm hover:bg-muted/80 transition-colors">
+                Ortga
+              </button>
+              <button onClick={saveAll}
+                className="flex-1 py-2.5 bg-primary text-white rounded-xl font-semibold text-sm hover:bg-primary/90 transition-colors">
+                Ha, saqlash
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
