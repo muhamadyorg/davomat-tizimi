@@ -12,11 +12,14 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-ok()   { echo -e "${GREEN}✔ $1${NC}"; }
-info() { echo -e "${BLUE}▶ $1${NC}"; }
-warn() { echo -e "${YELLOW}⚠ $1${NC}"; }
-fail() { echo -e "${RED}✘ $1${NC}"; exit 1; }
-sep()  { echo -e "${CYAN}──────────────────────────────────────────────${NC}"; }
+ok()    { echo -e "${GREEN}  ✔ $1${NC}"; }
+skip()  { echo -e "${CYAN}  ↩ $1 (allaqachon mavjud — o'tkazildi)${NC}"; }
+info()  { echo -e "${BLUE}  ▶ $1${NC}"; }
+warn()  { echo -e "${YELLOW}  ⚠ $1${NC}"; }
+fail()  { echo -e "${RED}  ✘ $1${NC}"; exit 1; }
+step()  { echo -e "\n${BOLD}${CYAN}[$1/$TOTAL] $2${NC}"; echo -e "${CYAN}  ──────────────────────────────────────${NC}"; }
+
+TOTAL=7
 
 # ─────────────────────────────────────────
 #  Root tekshirish
@@ -27,12 +30,14 @@ fi
 
 clear
 echo -e "${BOLD}${CYAN}"
-echo "   aaPanel + Davomat Tizimi — O'rnatish"
+echo "  ╔══════════════════════════════════════════╗"
+echo "  ║   aaPanel + Davomat Tizimi o'rnatish     ║"
+echo "  ║   hr.muhamadyorg.uz                      ║"
+echo "  ╚══════════════════════════════════════════╝"
 echo -e "${NC}"
-sep
 
 # ─────────────────────────────────────────
-#  Sozlamalar
+#  Asosiy sozlamalar
 # ─────────────────────────────────────────
 DOMAIN="hr.muhamadyorg.uz"
 WEB_ROOT="/www/wwwroot/${DOMAIN}"
@@ -41,129 +46,201 @@ REPO_URL="https://github.com/muhamadyorg/davomat-tizimi.git"
 API_PORT=3001
 DB_NAME="davomat_db"
 DB_USER="davomat"
+ENV_FILE="$APP_DIR/.env"
+STATE_FILE="$APP_DIR/.deploy_state"
 
+# ─────────────────────────────────────────
+#  .env mavjudligini tekshirish
+#  Agar mavjud bo'lsa — eski parollarni O'QIYMIZ
+#  Agar yo'q bo'lsa — yangi parol so'raymiz
+# ─────────────────────────────────────────
 echo ""
-read -p "$(echo -e ${YELLOW}PostgreSQL parol [bo\'sh qoldirsa avtomatik yaratiladi]: ${NC})" DB_PASS
-DB_PASS=$(echo "$DB_PASS" | xargs)
-if [ -z "$DB_PASS" ]; then
-  DB_PASS=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 20)
-  warn "Avtomatik DB parol: ${BOLD}$DB_PASS${NC}  (eslab qoling!)"
+if [ -f "$ENV_FILE" ]; then
+  echo -e "${GREEN}  ✔ Mavjud o'rnatish topildi — sozlamalar saqlanadi${NC}"
+  # Eski .env dan o'qiymiz
+  DB_PASS=$(grep "^DATABASE_URL=" "$ENV_FILE" | sed 's/.*:\/\/[^:]*:\([^@]*\)@.*/\1/')
+  SESSION_SECRET=$(grep "^SESSION_SECRET=" "$ENV_FILE" | cut -d'=' -f2-)
+  EXISTING_INSTALL=true
+  echo -e "  ${CYAN}DB parol va session secret eski .env dan olinmoqda...${NC}"
+else
+  echo -e "${YELLOW}  Yangi o'rnatish — bir necha savol:${NC}"
+  echo ""
+  read -p "  PostgreSQL parol [bo'sh = avtomatik]: " DB_PASS
+  DB_PASS=$(echo "$DB_PASS" | xargs)
+  if [ -z "$DB_PASS" ]; then
+    DB_PASS=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 20)
+    echo -e "  ${YELLOW}Avtomatik parol: ${BOLD}$DB_PASS${NC}"
+    echo -e "  ${YELLOW}(Bu parolni eslab qoling!)${NC}"
+  fi
+  SESSION_SECRET=$(openssl rand -base64 40 | tr -dc 'a-zA-Z0-9' | head -c 48)
+  EXISTING_INSTALL=false
 fi
 
-SESSION_SECRET=$(openssl rand -base64 32)
-
 echo ""
-info "O'rnatish boshlandi..."
-sep
+echo -e "${CYAN}  Boshlayapmiz...${NC}"
 
-# ─────────────────────────────────────────
-#  1. Node.js 20
-# ─────────────────────────────────────────
-sep
-info "[1/7] Node.js 20 tekshirilmoqda..."
-if ! command -v node &>/dev/null || [[ "$(node -v 2>/dev/null | cut -d'.' -f1 | tr -d 'v')" -lt 20 ]]; then
-  info "    Node.js 20 o'rnatilmoqda..."
+# ═══════════════════════════════════════════
+#  1. Node.js, pnpm, PM2
+# ═══════════════════════════════════════════
+step 1 "Node.js, pnpm, PM2 tekshirilmoqda"
+
+NODE_VERSION=$(node -v 2>/dev/null | cut -d'.' -f1 | tr -d 'v' || echo "0")
+if [[ "$NODE_VERSION" -lt 20 ]]; then
+  info "Node.js 20 o'rnatilmoqda..."
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
-  apt-get install -y -qq nodejs
+  apt-get install -y -qq nodejs >/dev/null 2>&1
   ok "Node.js $(node -v) o'rnatildi"
 else
-  ok "Node.js $(node -v) allaqachon mavjud"
+  skip "Node.js $(node -v)"
 fi
 
 if ! command -v pnpm &>/dev/null; then
+  info "pnpm o'rnatilmoqda..."
   npm install -g pnpm --silent
   ok "pnpm o'rnatildi"
 else
-  ok "pnpm allaqachon mavjud"
+  skip "pnpm $(pnpm -v)"
 fi
 
 if ! command -v pm2 &>/dev/null; then
+  info "PM2 o'rnatilmoqda..."
   npm install -g pm2 --silent
   ok "PM2 o'rnatildi"
 else
-  ok "PM2 allaqachon mavjud"
+  skip "PM2 $(pm2 -v 2>/dev/null | head -1)"
 fi
 
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════
 #  2. PostgreSQL
-# ─────────────────────────────────────────
-sep
-info "[2/7] PostgreSQL tekshirilmoqda..."
+# ═══════════════════════════════════════════
+step 2 "PostgreSQL tekshirilmoqda"
+
 if ! command -v psql &>/dev/null; then
-  info "    PostgreSQL o'rnatilmoqda..."
-  apt-get install -y -qq postgresql postgresql-contrib
+  info "PostgreSQL o'rnatilmoqda..."
+  apt-get install -y -qq postgresql postgresql-contrib >/dev/null 2>&1
   systemctl enable postgresql --quiet
-  systemctl start postgresql
   ok "PostgreSQL o'rnatildi"
 else
-  ok "PostgreSQL allaqachon mavjud"
-  systemctl start postgresql 2>/dev/null || true
+  skip "PostgreSQL $(psql --version | awk '{print $3}')"
 fi
 
-# DB foydalanuvchi va baza
-sudo -u postgres psql -tc "SELECT 1 FROM pg_user WHERE usename='${DB_USER}'" | grep -q 1 || \
-  sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASS}';" >/dev/null
+# PostgreSQL ishlamasini ta'minlash
+systemctl start postgresql 2>/dev/null || true
+sleep 1
 
-sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || \
-  sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};" >/dev/null
-
-ok "Database tayyor: ${DB_NAME}"
-
-# ─────────────────────────────────────────
-#  3. Kodni yuklab olish
-# ─────────────────────────────────────────
-sep
-info "[3/7] Kod yuklanmoqda..."
-if [ -d "$APP_DIR/.git" ]; then
-  warn "Allaqachon mavjud — yangilanmoqda..."
-  cd "$APP_DIR"
-  git pull origin main --quiet
+# DB foydalanuvchi
+if sudo -u postgres psql -tc "SELECT 1 FROM pg_user WHERE usename='${DB_USER}'" 2>/dev/null | grep -q 1; then
+  skip "DB foydalanuvchi '${DB_USER}'"
 else
-  mkdir -p /www/server
+  info "DB foydalanuvchi yaratilmoqda..."
+  sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASS}';" >/dev/null
+  ok "DB foydalanuvchi yaratildi: ${DB_USER}"
+fi
+
+# Baza
+if sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" 2>/dev/null | grep -q 1; then
+  skip "Baza '${DB_NAME}'"
+else
+  info "Baza yaratilmoqda..."
+  sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};" >/dev/null
+  ok "Baza yaratildi: ${DB_NAME}"
+fi
+
+# ═══════════════════════════════════════════
+#  3. Kodni yuklab olish / yangilash
+# ═══════════════════════════════════════════
+step 3 "Kod tekshirilmoqda"
+
+mkdir -p /www/server
+
+if [ -d "$APP_DIR/.git" ]; then
+  cd "$APP_DIR"
+  LOCAL_HASH=$(git rev-parse HEAD 2>/dev/null || echo "")
+  info "Yangi o'zgarishlar tekshirilmoqda..."
+  git fetch origin main --quiet 2>/dev/null || true
+  REMOTE_HASH=$(git rev-parse origin/main 2>/dev/null || echo "")
+
+  if [ "$LOCAL_HASH" = "$REMOTE_HASH" ]; then
+    skip "Kod (o'zgarish yo'q — $LOCAL_HASH)"
+    CODE_CHANGED=false
+  else
+    git pull origin main --quiet
+    ok "Kod yangilandi: $LOCAL_HASH → $REMOTE_HASH"
+    CODE_CHANGED=true
+  fi
+else
+  info "Kod yuklanmoqda..."
   git clone "$REPO_URL" "$APP_DIR" --quiet
   cd "$APP_DIR"
+  ok "Kod yuklandi: $APP_DIR"
+  CODE_CHANGED=true
 fi
-ok "Kod yuklandi: $APP_DIR"
 
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════
 #  4. .env fayli
-# ─────────────────────────────────────────
-sep
-info "[4/7] Sozlamalar yozilmoqda..."
-cat > "$APP_DIR/.env" << EOF
+# ═══════════════════════════════════════════
+step 4 ".env fayli tekshirilmoqda"
+
+if [ -f "$ENV_FILE" ] && [ "$EXISTING_INSTALL" = true ]; then
+  skip ".env fayli (mavjud, o'zgartirilmaydi)"
+else
+  cat > "$ENV_FILE" << EOF
 DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}
 SESSION_SECRET=${SESSION_SECRET}
 NODE_ENV=production
 PORT=${API_PORT}
 EOF
-ok ".env fayli yaratildi"
+  ok ".env fayli yaratildi"
+fi
 
-# ─────────────────────────────────────────
-#  5. Paketlar + Build
-# ─────────────────────────────────────────
-sep
-info "[5/7] Paketlar o'rnatilmoqda (1-2 daqiqa)..."
+# ═══════════════════════════════════════════
+#  5. Paketlar va Build
+# ═══════════════════════════════════════════
+step 5 "Paketlar va build"
+
 cd "$APP_DIR"
-pnpm install --frozen-lockfile --silent
-ok "Paketlar o'rnatildi"
+LAST_BUILD_HASH=$(cat "$STATE_FILE" 2>/dev/null || echo "")
+CURRENT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "new")
 
-info "    Backend build qilinmoqda..."
-pnpm --filter @workspace/api-server run build --silent
-ok "    Backend tayyor"
+if [ "$LAST_BUILD_HASH" = "$CURRENT_HASH" ] && \
+   [ -f "$APP_DIR/artifacts/api-server/dist/index.mjs" ] && \
+   [ -d "$APP_DIR/artifacts/davomat/dist/public" ]; then
+  skip "Build (o'zgarish yo'q — avvalgi build ishlatiladi)"
+  BUILD_DONE=false
+else
+  info "Paketlar o'rnatilmoqda (1-2 daqiqa)..."
+  pnpm install --frozen-lockfile --silent
+  ok "Paketlar o'rnatildi"
 
-info "    Frontend build qilinmoqda..."
-BASE_PATH="/" pnpm --filter @workspace/davomat run build --silent
-ok "    Frontend tayyor"
+  info "Backend build qilinmoqda..."
+  pnpm --filter @workspace/api-server run build --silent
+  ok "Backend build tayyor"
 
-# ─────────────────────────────────────────
-#  6. Database migratsiyasi + seed
-# ─────────────────────────────────────────
-sep
-info "[6/7] Database tayyorlanmoqda..."
+  info "Frontend build qilinmoqda..."
+  BASE_PATH="/" pnpm --filter @workspace/davomat run build --silent
+  ok "Frontend build tayyor"
+
+  echo "$CURRENT_HASH" > "$STATE_FILE"
+  BUILD_DONE=true
+fi
+
+# ═══════════════════════════════════════════
+#  6. Database migratsiyasi + PM2
+# ═══════════════════════════════════════════
+step 6 "Database va server"
+
+# .env dan DATABASE_URL o'qish
+export DATABASE_URL=$(grep "^DATABASE_URL=" "$ENV_FILE" | cut -d'=' -f2-)
+export SESSION_SECRET=$(grep "^SESSION_SECRET=" "$ENV_FILE" | cut -d'=' -f2-)
+export PORT=$API_PORT
+export NODE_ENV=production
+
+# DB migratsiyasi (har safar tekshiriladi — xavfsiz)
+info "Database jadvallari tekshirilmoqda..."
 cd "$APP_DIR/lib/db"
-DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}" \
+DATABASE_URL="$DATABASE_URL" \
   npx drizzle-kit push --config=drizzle.config.ts --force >/dev/null 2>&1
-ok "Jadvallar yaratildi"
+ok "Database jadvallari tayyor"
 
 # PM2 ecosystem fayli
 cat > "$APP_DIR/ecosystem.config.cjs" << EOF
@@ -176,117 +253,148 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: ${API_PORT},
-        DATABASE_URL: 'postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}',
-        SESSION_SECRET: '${SESSION_SECRET}'
+        DATABASE_URL: '$(grep "^DATABASE_URL=" "$ENV_FILE" | cut -d'=' -f2-)',
+        SESSION_SECRET: '$(grep "^SESSION_SECRET=" "$ENV_FILE" | cut -d'=' -f2-)'
       },
       exp_backoff_restart_delay: 100,
-      max_restarts: 10
+      max_restarts: 10,
+      restart_delay: 3000
     }
   ]
 };
 EOF
 
-pm2 delete davomat-api 2>/dev/null || true
-pm2 start "$APP_DIR/ecosystem.config.cjs" >/dev/null 2>&1
-
-info "    API server tayyor bo'lishini kutilmoqda..."
-for i in $(seq 1 20); do
-  sleep 1
-  if curl -sf "http://localhost:${API_PORT}/api/health" >/dev/null 2>&1; then
-    ok "    API server ishlayapti"
-    break
-  fi
-  [ "$i" -eq 20 ] && warn "    Server 20s ichida ishlamadi"
-done
-
-SEED_RESULT=$(curl -s -X POST "http://localhost:${API_PORT}/api/seed" 2>/dev/null || echo "")
-if echo "$SEED_RESULT" | grep -qi "seed\|success\|already"; then
-  ok "    Boshlang'ich ma'lumotlar kiritildi"
+# PM2: ishlamoqdami?
+PM2_RUNNING=$(pm2 list 2>/dev/null | grep "davomat-api" | grep "online" || echo "")
+if [ -n "$PM2_RUNNING" ] && [ "$BUILD_DONE" = false ]; then
+  skip "PM2 davomat-api (ishlayapti, o'zgarish yo'q)"
+elif [ -n "$PM2_RUNNING" ]; then
+  info "API server qayta ishga tushirilmoqda (yangi build)..."
+  pm2 restart davomat-api >/dev/null 2>&1
+  ok "API server qayta ishga tushdi"
 else
-  warn "    Seed: $SEED_RESULT"
+  info "API server birinchi marta ishga tushirilmoqda..."
+  pm2 delete davomat-api 2>/dev/null || true
+  pm2 start "$APP_DIR/ecosystem.config.cjs" >/dev/null 2>&1
+  ok "API server ishga tushdi"
 fi
 
-pm2 save >/dev/null 2>&1
-pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
-pm2 save >/dev/null 2>&1
-systemctl enable pm2-root >/dev/null 2>&1 || true
-ok "PM2 sozlandi (doimiy)"
+# Server tayyor bo'lishini kutish
+info "API server tayyor bo'lishini kutilmoqda..."
+SERVER_OK=false
+for i in $(seq 1 25); do
+  sleep 1
+  if curl -sf "http://localhost:${API_PORT}/api/health" >/dev/null 2>&1; then
+    SERVER_OK=true
+    ok "API server ishlayapti (port: ${API_PORT})"
+    break
+  fi
+  printf "."
+done
+echo ""
 
-# ─────────────────────────────────────────
-#  7. Frontend fayllarni aaPanel web root ga ko'chirish
-# ─────────────────────────────────────────
-sep
-info "[7/7] Frontend fayllar aaPanel papkasiga ko'chirilmoqda..."
+if [ "$SERVER_OK" = false ]; then
+  warn "Server 25s ichida javob bermadi. Loglarni tekshiring: pm2 logs davomat-api"
+fi
+
+# Seed (faqat yangi o'rnatishda)
+if [ "$EXISTING_INSTALL" = false ] && [ "$SERVER_OK" = true ]; then
+  info "Boshlang'ich ma'lumotlar kiritilmoqda..."
+  SEED_RESULT=$(curl -s -X POST "http://localhost:${API_PORT}/api/seed" 2>/dev/null || echo "")
+  if echo "$SEED_RESULT" | grep -qi "seed\|success\|already"; then
+    ok "superadmin va admin yaratildi"
+  else
+    warn "Seed natijasi: ${SEED_RESULT:-javob yo'q}"
+  fi
+else
+  skip "Seed (mavjud o'rnatish — ma'lumotlar saqlanadi)"
+fi
+
+# PM2 startup sozlash
+pm2 save >/dev/null 2>&1
+pm2 startup systemd -u root --hp /root 2>/dev/null | grep "systemctl" | bash 2>/dev/null || true
+pm2 save >/dev/null 2>&1
+systemctl enable pm2-root 2>/dev/null || true
+ok "PM2 doimiy ishga tushish sozlandi"
+
+# ═══════════════════════════════════════════
+#  7. Frontend fayllar → aaPanel web root
+# ═══════════════════════════════════════════
+step 7 "Frontend fayllar → $WEB_ROOT"
+
 mkdir -p "$WEB_ROOT"
 
-# Eski fayllarni tozalash (user.ini ni saqlab)
-find "$WEB_ROOT" -mindepth 1 -not -name 'user.ini' -delete 2>/dev/null || true
-
-# Yangi build fayllarni ko'chirish
-cp -r "$APP_DIR/artifacts/davomat/dist/public/." "$WEB_ROOT/"
-
-ok "Frontend fayllar ko'chirildi: $WEB_ROOT"
+if [ "$BUILD_DONE" = true ]; then
+  info "Frontend fayllar yangilanmoqda..."
+  find "$WEB_ROOT" -mindepth 1 -not -name 'user.ini' -delete 2>/dev/null || true
+  cp -r "$APP_DIR/artifacts/davomat/dist/public/." "$WEB_ROOT/"
+  ok "Frontend fayllar ko'chirildi"
+else
+  skip "Frontend fayllar (o'zgarish yo'q)"
+fi
 
 # ─────────────────────────────────────────
-#  aaPanel uchun nginx config snippet
+#  Nginx snippet (har safar ko'rsatiladi)
 # ─────────────────────────────────────────
-sep
-info "aaPanel nginx konfiguratsiyasi yaratilmoqda..."
+NGINX_CONF="/tmp/davomat_nginx.conf"
+cat > "$NGINX_CONF" << 'NGINXEOF'
+    # Davomat API — proxy
+    location /api/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 90;
+    }
 
-cat > /tmp/davomat_nginx_snippet.conf << 'NGINXEOF'
-# === Davomat Tizimi — aaPanel nginx snippet ===
-# aaPanel → Website → hr.muhamadyorg.uz → Config → bu qatorlarni qo'shing
-
-# API so'rovlarini backend ga yo'naltirish
-location /api/ {
-    proxy_pass http://127.0.0.1:3001;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection 'upgrade';
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_read_timeout 90;
-}
-
-# SPA uchun — barcha yo'llar index.html ga
-location / {
-    try_files $uri $uri/ /index.html;
-}
+    # SPA — barcha yo'llar index.html ga
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
 NGINXEOF
-
-ok "nginx snippet: /tmp/davomat_nginx_snippet.conf"
 
 # ─────────────────────────────────────────
 #  Yakuniy xulosa
 # ─────────────────────────────────────────
-sep
 echo ""
-echo -e "${BOLD}${GREEN}  ✔ O'RNATISH YAKUNLANDI!${NC}"
+echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}${GREEN}║        O'RNATISH MUVAFFAQIYATLI YAKUNLANDI   ║${NC}"
+echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${BOLD}  Kirish:${NC}  superadmin / superadmin123"
+
+if [ "$SERVER_OK" = true ]; then
+  echo -e "  ${GREEN}● API server ishlayapti${NC}  (port $API_PORT)"
+else
+  echo -e "  ${RED}● API server ishlamayapti${NC} — ${YELLOW}pm2 logs davomat-api${NC}"
+fi
+
 echo ""
-echo -e "${BOLD}${YELLOW}  Endi aaPanel da qilish kerak (1 ta qadam):${NC}"
+echo -e "${BOLD}  Kirish ma'lumotlari:${NC}"
+echo -e "  Login:  ${CYAN}superadmin${NC}   Parol: ${CYAN}superadmin123${NC}"
+echo -e "  Login:  ${CYAN}admin${NC}        Parol: ${CYAN}admin123${NC}"
 echo ""
-echo -e "  1. aaPanel → ${CYAN}Website${NC} → ${CYAN}hr.muhamadyorg.uz${NC} → ${CYAN}Config${NC} ni oching"
-echo -e "     (yoki ${CYAN}Nginx Config${NC} / ${CYAN}Site Config${NC})"
+echo -e "${BOLD}${YELLOW}  ❗ aaPanel da BITTA qadam qoldi:${NC}"
 echo ""
-echo -e "  2. server { ... } ichida 'location /' bo'limini topib,"
-echo -e "     quyidagi konfiguratsiyaga almashtiring:"
+echo -e "  1. aaPanel → ${CYAN}Website${NC} → ${CYAN}${DOMAIN}${NC} → ${CYAN}Config${NC}"
+echo -e "     (yoki 'Nginx Config' → 'Config' tugmasi)"
 echo ""
-echo -e "${CYAN}─────────────────────────────────────────${NC}"
-cat /tmp/davomat_nginx_snippet.conf
-echo -e "${CYAN}─────────────────────────────────────────${NC}"
+echo -e "  2. Ichidagi ${YELLOW}location /${NC} ni topib, hammasi bilan almashtiring:"
 echo ""
-echo -e "  3. Nginx ni qayta ishga tushiring:"
-echo -e "     ${YELLOW}nginx -t && systemctl reload nginx${NC}"
+echo -e "${CYAN}  ─────────────────────────────────────────────────${NC}"
+cat "$NGINX_CONF"
+echo -e "${CYAN}  ─────────────────────────────────────────────────${NC}"
 echo ""
-echo -e "${BOLD}  So'ng brauzerda oching:${NC}  https://hr.muhamadyorg.uz"
+echo -e "  3. ${GREEN}Save${NC} bosing → ${GREEN}Reload${NC}"
+echo ""
+echo -e "  So'ng: ${BOLD}https://${DOMAIN}${NC}"
 echo ""
 echo -e "${BOLD}  Foydali buyruqlar:${NC}"
-echo -e "  ${YELLOW}pm2 status${NC}                  — holat"
-echo -e "  ${YELLOW}pm2 logs davomat-api${NC}        — loglar"
-echo -e "  ${YELLOW}pm2 restart davomat-api${NC}     — qayta ishga tushirish"
+echo -e "  ${YELLOW}pm2 status${NC}                — holat ko'rish"
+echo -e "  ${YELLOW}pm2 logs davomat-api${NC}      — xatoliklarni ko'rish"
+echo -e "  ${YELLOW}pm2 restart davomat-api${NC}   — qayta ishga tushirish"
+echo -e "  ${YELLOW}bash deploy-aapanel.sh${NC}    — yangilash (xavfsiz, qaytadan ishga tushsa bo'ladi)"
 echo ""
-sep
