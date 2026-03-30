@@ -94,10 +94,17 @@ else
   skip "Node.js $(node -v)"
 fi
 
+# npm global bin papkasini PATH ga qo'shish
+NPM_BIN="$(npm config get prefix)/bin"
+export PATH="$NPM_BIN:$PATH"
+
 if ! command -v pnpm &>/dev/null; then
   info "pnpm o'rnatilmoqda..."
   npm install -g pnpm --silent
-  ok "pnpm o'rnatildi"
+  # Symlink yaratish — barcha hollarda topilsin uchun
+  ln -sf "$NPM_BIN/pnpm" /usr/local/bin/pnpm 2>/dev/null || true
+  hash -r 2>/dev/null || true
+  ok "pnpm $(pnpm -v) o'rnatildi"
 else
   skip "pnpm $(pnpm -v)"
 fi
@@ -105,6 +112,8 @@ fi
 if ! command -v pm2 &>/dev/null; then
   info "PM2 o'rnatilmoqda..."
   npm install -g pm2 --silent
+  ln -sf "$NPM_BIN/pm2" /usr/local/bin/pm2 2>/dev/null || true
+  hash -r 2>/dev/null || true
   ok "PM2 o'rnatildi"
 else
   skip "PM2 $(pm2 -v 2>/dev/null | head -1)"
