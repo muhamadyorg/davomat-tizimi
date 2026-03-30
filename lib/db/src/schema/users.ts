@@ -16,6 +16,7 @@ export const usersTable = pgTable("users", {
   departmentId: integer("department_id"),
   shiftId: integer("shift_id"),
   position: text("position"),
+  plainPassword: text("plain_password"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

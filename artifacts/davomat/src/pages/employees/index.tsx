@@ -9,6 +9,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 interface Employee {
   id: number;
   username: string;
+  plainPassword?: string | null;
   firstName: string;
   lastName: string;
   phone: string | null;
@@ -52,6 +53,7 @@ export default function Employees() {
   const [form, setForm] = useState({ firstName: "", lastName: "", phone: "", role: "employee", departmentId: "" });
   const [editForm, setEditForm] = useState({ firstName: "", lastName: "", phone: "", departmentId: "", role: "employee", username: "" });
   const [pwForm, setPwForm] = useState({ newPassword: "", showNew: false });
+  const [showDetailPw, setShowDetailPw] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -293,7 +295,7 @@ export default function Employees() {
           <div className="bg-card border border-border rounded-2xl shadow-2xl p-6 max-w-sm w-full">
             <div className="flex items-center justify-between mb-5">
               <h3 className="font-bold text-lg text-foreground font-display">Xodim ma'lumotlari</h3>
-              <button onClick={() => setDetailEmp(null)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground">
+              <button onClick={() => { setDetailEmp(null); setShowDetailPw(false); }} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -319,16 +321,35 @@ export default function Employees() {
               {(isSuperAdmin || detailEmp.id === user?.id) && (
                 <InfoRow label="Login" value={detailEmp.username} mono />
               )}
+              {/* Show password only to superadmin */}
+              {isSuperAdmin && (
+                <div className="flex items-center justify-between py-1 border-b border-border/40">
+                  <span className="text-sm text-muted-foreground w-28 shrink-0">Parol</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-mono text-foreground">
+                      {detailEmp.plainPassword
+                        ? (showDetailPw ? detailEmp.plainPassword : "••••••••")
+                        : <span className="text-muted-foreground italic text-xs">mavjud emas</span>}
+                    </span>
+                    {detailEmp.plainPassword && (
+                      <button onClick={() => setShowDetailPw(v => !v)}
+                        className="text-muted-foreground hover:text-foreground transition-colors">
+                        {showDetailPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="flex gap-2">
               {isSuperAdmin && (
-                <button onClick={() => { openEdit(detailEmp); setDetailEmp(null); }}
+                <button onClick={() => { openEdit(detailEmp); setDetailEmp(null); setShowDetailPw(false); }}
                   className="flex-1 py-2.5 bg-primary text-white rounded-xl font-semibold text-sm hover:bg-primary/90 transition-colors flex items-center justify-center gap-2">
                   <Edit2 className="w-4 h-4" /> Tahrirlash
                 </button>
               )}
               {canEditCreds(detailEmp) && (
-                <button onClick={() => { openPw(detailEmp); setDetailEmp(null); }}
+                <button onClick={() => { openPw(detailEmp); setDetailEmp(null); setShowDetailPw(false); }}
                   className="flex-1 py-2.5 bg-muted text-foreground rounded-xl font-semibold text-sm hover:bg-muted/80 transition-colors flex items-center justify-center gap-2">
                   <KeyRound className="w-4 h-4" /> Parol
                 </button>

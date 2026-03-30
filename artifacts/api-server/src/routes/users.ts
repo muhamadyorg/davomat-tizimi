@@ -28,6 +28,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
 
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
+  const isSuperAdmin = req.user?.role === "superadmin";
   const users = await db
     .select({
       id: usersTable.id,
@@ -44,6 +45,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
       position: usersTable.position,
       isActive: usersTable.isActive,
       createdAt: usersTable.createdAt,
+      ...(isSuperAdmin ? { plainPassword: usersTable.plainPassword } : {}),
     })
     .from(usersTable)
     .leftJoin(departmentsTable, eq(usersTable.departmentId, departmentsTable.id))
@@ -106,6 +108,7 @@ router.post("/", requireRole("superadmin", "admin"), async (req: AuthRequest, re
     .values({
       username,
       password: hashedPassword,
+      plainPassword: password,
       firstName,
       lastName,
       email: email || null,
@@ -226,7 +229,7 @@ router.put("/:id/password", async (req: AuthRequest, res: Response) => {
   }
 
   const hashedPassword = await bcrypt.hash(newPassword, 10);
-  await db.update(usersTable).set({ password: hashedPassword, updatedAt: new Date() }).where(eq(usersTable.id, id));
+  await db.update(usersTable).set({ password: hashedPassword, plainPassword: newPassword, updatedAt: new Date() }).where(eq(usersTable.id, id));
   res.json({ message: "Password changed successfully" });
 });
 
