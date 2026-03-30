@@ -235,7 +235,7 @@ export default function Employees() {
                         <KeyRound className="w-3.5 h-3.5" /> Login/Parol
                       </button>
                     )}
-                    {isSuperAdmin && emp.id !== user?.id && (
+                    {(isSuperAdmin || isAdmin) && emp.id !== user?.id && (
                       <button onClick={() => handleDelete(emp)}
                         className="w-full text-left px-4 py-2 text-sm text-destructive hover:bg-destructive/10 flex items-center gap-2">
                         <Trash2 className="w-3.5 h-3.5" /> O'chirish

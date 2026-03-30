@@ -14,7 +14,7 @@ import AttendanceMark from "@/pages/attendance/checkin";
 import AttendanceHistory from "@/pages/attendance/index";
 import Employees from "@/pages/employees/index";
 import Departments from "@/pages/departments/index";
-import Reports from "@/pages/reports/index";
+
 
 const queryClient = new QueryClient();
 
@@ -44,7 +44,6 @@ function Router() {
       <Route path="/attendance" component={() => <ProtectedRoute component={AttendanceHistory} />} />
       <Route path="/employees" component={() => <ProtectedRoute component={Employees} />} />
       <Route path="/departments" component={() => <ProtectedRoute component={Departments} />} />
-      <Route path="/reports" component={() => <ProtectedRoute component={Reports} />} />
       <Route component={NotFound} />
     </Switch>
   );

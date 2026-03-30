@@ -189,7 +189,7 @@ router.put("/:id", requireRole("superadmin", "admin"), async (req: AuthRequest, 
   res.json(updated[0]);
 });
 
-router.delete("/:id", requireRole("superadmin"), async (req: AuthRequest, res: Response) => {
+router.delete("/:id", requireRole("superadmin", "admin"), async (req: AuthRequest, res: Response) => {
   const id = Number(req.params.id);
   if (id === req.user!.id) {
     res.status(400).json({ message: "Cannot delete yourself" });

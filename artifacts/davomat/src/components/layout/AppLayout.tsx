@@ -6,7 +6,7 @@ import { useLogout } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   LayoutDashboard, ClipboardList, CalendarDays, Users, Building2,
-  BarChart3, LogOut, Menu, X, Sun, Moon, KeyRound, Eye, EyeOff, AlertCircle,
+  LogOut, Menu, X, Sun, Moon, KeyRound, Eye, EyeOff, AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -20,7 +20,6 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Davomat tarixi",    href: "/attendance",     icon: CalendarDays,    roles: ["superadmin", "admin"] },
   { label: "Xodimlar",          href: "/employees",      icon: Users,           roles: ["superadmin", "admin"] },
   { label: "Bo'limlar",         href: "/departments",    icon: Building2,       roles: ["superadmin"] },
-  { label: "Hisobotlar",        href: "/reports",        icon: BarChart3,       roles: ["superadmin", "admin"] },
 ];
 
 function roleName(role: string) {
