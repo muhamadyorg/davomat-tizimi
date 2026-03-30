@@ -45,7 +45,6 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard title="Bugun keldi" value={stats.todayPresent}
-          subtitle={`${total} xodimdan`}
           icon={<CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400" />}
           badge={`${Math.round((stats.todayPresent / total) * 100)}%`} badgeGreen />
         <StatCard title="Kelmadi" value={stats.todayAbsent}

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useListDepartments } from "@workspace/api-client-react";
-import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, eachDayOfInterval, parseISO } from "date-fns";
-import { Calendar, Building2, Users, ChevronLeft, ChevronRight, Info } from "lucide-react";
+import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, eachDayOfInterval } from "date-fns";
+import { Building2, Users, ChevronLeft, ChevronRight, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -41,34 +42,54 @@ function getDateRange(tab: Tab, anchor: Date): { start: Date; end: Date; label: 
   }
 }
 
-function DayCell({ rec, date }: { rec?: AttRec; date: Date }) {
-  const [tooltip, setTooltip] = useState(false);
-  if (!rec) return (
-    <td className="p-0.5">
-      <div className="w-8 h-8 rounded-md bg-muted/30 text-muted-foreground/30 flex items-center justify-center text-xs">–</div>
-    </td>
-  );
+// Tooltip rendered into document.body via portal to escape scroll container clipping
+function DayCell({ rec }: { rec?: AttRec }) {
+  const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
+
+  if (!rec) {
+    return (
+      <td className="p-0.5">
+        <div className="w-8 h-8 rounded-md bg-muted/30 text-muted-foreground/30 flex items-center justify-center text-xs select-none">–</div>
+      </td>
+    );
+  }
+
   const s = STATUS_CELL[rec.status];
-  const time = rec.checkIn ? format(new Date(rec.checkIn), "HH:mm") : "";
+  const timeIn  = rec.checkIn  ? format(new Date(rec.checkIn),  "HH:mm") : "";
+  const timeOut = rec.checkOut ? format(new Date(rec.checkOut), "HH:mm") : "";
+
   return (
-    <td className="p-0.5 relative">
+    <td className="p-0.5">
       <button
-        onMouseEnter={() => setTooltip(true)} onMouseLeave={() => setTooltip(false)}
-        onClick={() => setTooltip(p => !p)}
-        className={cn("w-8 h-8 rounded-md flex items-center justify-center text-xs font-bold transition-all hover:scale-110", s.cls)}
+        onMouseEnter={(e) => setTipPos({ x: e.clientX, y: e.clientY })}
+        onMouseLeave={() => setTipPos(null)}
+        onMouseMove={(e) => setTipPos({ x: e.clientX, y: e.clientY })}
+        className={cn("w-8 h-8 rounded-md flex items-center justify-center text-xs font-bold transition-colors", s.cls)}
       >
         {s.emoji}
       </button>
-      {tooltip && (
-        <div className="absolute z-20 bottom-full left-1/2 -translate-x-1/2 mb-2 bg-card border border-border rounded-xl shadow-xl p-3 min-w-[160px] text-left pointer-events-none">
-          <div className={cn("text-xs font-bold mb-1", s.cls.split(" ").pop())}>{s.label}</div>
-          {time && <div className="text-[11px] text-muted-foreground font-mono">Keldi: {time}</div>}
-          {rec.checkOut && <div className="text-[11px] text-muted-foreground font-mono">Ketdi: {format(new Date(rec.checkOut), "HH:mm")}</div>}
-          {rec.workHours > 0 && <div className="text-[11px] text-muted-foreground">{rec.workHours.toFixed(1)} soat</div>}
+
+      {tipPos && createPortal(
+        <div
+          style={{
+            position: "fixed",
+            left: tipPos.x + 14,
+            top: tipPos.y - 10,
+            transform: "translateY(-100%)",
+            zIndex: 99999,
+            pointerEvents: "none",
+          }}
+          className="bg-card border border-border rounded-xl shadow-2xl p-3 min-w-[170px] text-left"
+        >
+          <div className={cn("text-xs font-bold mb-1.5", s.cls.split(" ").filter(c => c.startsWith("text-")).join(" "))}>{s.label}</div>
+          {timeIn  && <div className="text-[11px] text-muted-foreground font-mono">Keldi: {timeIn}</div>}
+          {timeOut && <div className="text-[11px] text-muted-foreground font-mono">Ketdi: {timeOut}</div>}
+          {rec.workHours > 0 && <div className="text-[11px] text-muted-foreground mt-0.5">{rec.workHours.toFixed(1)} soat ishladi</div>}
           {rec.note && (
-            <div className="mt-1.5 pt-1.5 border-t border-border text-[11px] text-foreground italic">"{rec.note}"</div>
+            <div className="mt-1.5 pt-1.5 border-t border-border/50 text-[11px] text-foreground italic">"{rec.note}"</div>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </td>
   );
@@ -108,11 +129,8 @@ export default function AttendanceHistory() {
   records.forEach(r => recMap.set(`${r.userId}_${r.date}`, r));
 
   const filteredEmps = employees.filter(e => {
-    if (empFilter) {
-      const name = `${e.firstName} ${e.lastName}`.toLowerCase();
-      if (!name.includes(empFilter.toLowerCase())) return false;
-    }
-    return true;
+    if (!empFilter) return true;
+    return `${e.firstName} ${e.lastName}`.toLowerCase().includes(empFilter.toLowerCase());
   });
 
   const grouped: Record<string, Emp[]> = {};
@@ -146,6 +164,8 @@ export default function AttendanceHistory() {
     { id: "oylik", label: "Oylik" },
   ];
 
+  const WEEK_DAYS = ["Yak", "Du", "Se", "Ch", "Pa", "Ju", "Sh"];
+
   return (
     <div className="space-y-5">
       <div>
@@ -167,12 +187,12 @@ export default function AttendanceHistory() {
 
       {/* Filters */}
       <div className="bg-card border border-border/50 rounded-2xl p-4 flex flex-wrap gap-3 items-center shadow-sm">
-        {/* Period nav */}
-        <div className="flex items-center gap-2 bg-muted rounded-lg p-1">
+        {/* Period navigation */}
+        <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
           <button onClick={navPrev} className="p-1.5 text-muted-foreground hover:text-foreground rounded-md transition-colors">
             <ChevronLeft className="w-4 h-4" />
           </button>
-          <span className="text-sm font-semibold text-foreground px-2 min-w-[180px] text-center">{label}</span>
+          <span className="text-sm font-semibold text-foreground px-2 min-w-[190px] text-center">{label}</span>
           <button onClick={navNext} className="p-1.5 text-muted-foreground hover:text-foreground rounded-md transition-colors">
             <ChevronRight className="w-4 h-4" />
           </button>
@@ -199,12 +219,15 @@ export default function AttendanceHistory() {
         </div>
 
         {/* Legend */}
-        <div className="flex gap-2 flex-wrap">
-          {Object.entries(STATUS_CELL).filter(([k]) => k !== "early_leave").map(([, v]) => (
-            <span key={v.label} className={cn("text-[10px] font-bold px-2 py-0.5 rounded-md", v.cls)}>
-              {v.emoji} {v.label}
-            </span>
-          ))}
+        <div className="flex gap-1.5 flex-wrap">
+          {(["present", "late", "absent", "on_leave"] as StatusType[]).map(k => {
+            const v = STATUS_CELL[k];
+            return (
+              <span key={k} className={cn("text-[10px] font-bold px-2 py-0.5 rounded-md", v.cls)}>
+                {v.emoji} {v.label}
+              </span>
+            );
+          })}
         </div>
       </div>
 
@@ -223,23 +246,27 @@ export default function AttendanceHistory() {
                 <span className="ml-auto text-xs text-muted-foreground">{emps.length} xodim</span>
               </div>
 
+              {/* Scroll wrapper — only horizontal, so tooltips (rendered to body) won't be clipped */}
               <div className="overflow-x-auto">
-                <table className="w-full">
+                <table className="w-full border-collapse" style={{ minWidth: Math.max(400, 200 + days.length * 36 + 120) }}>
                   <thead>
                     <tr className="border-b border-border/30">
-                      <th className="px-4 py-2 text-left text-xs font-bold text-muted-foreground sticky left-0 bg-card min-w-[160px]">Xodim</th>
+                      {/* Sticky name column */}
+                      <th className="px-4 py-2 text-left text-xs font-bold text-muted-foreground bg-card sticky left-0 z-10 min-w-[160px]">
+                        Xodim
+                      </th>
                       {days.map(d => (
-                        <th key={d.toISOString()} className="px-0.5 py-2 text-center min-w-[36px]">
-                          <div className={cn("text-[10px] font-bold",
-                            [0, 6].includes(d.getDay()) ? "text-muted-foreground/50" : "text-muted-foreground"
+                        <th key={d.toISOString()} className="px-0.5 py-2 text-center min-w-[34px]">
+                          <div className={cn("text-[10px] font-bold leading-none",
+                            [0, 6].includes(d.getDay()) ? "text-muted-foreground/40" : "text-muted-foreground"
                           )}>
                             {format(d, "dd")}
                           </div>
-                          <div className="text-[9px] text-muted-foreground/60">{["Yak","Du","Se","Ch","Pa","Ju","Sh"][d.getDay()]}</div>
+                          <div className="text-[9px] text-muted-foreground/50 mt-0.5">{WEEK_DAYS[d.getDay()]}</div>
                         </th>
                       ))}
-                      <th className="px-3 py-2 text-center text-xs font-bold text-muted-foreground min-w-[60px]">Jami</th>
-                      <th className="px-3 py-2 text-center text-xs font-bold text-muted-foreground min-w-[60px]">Soat</th>
+                      <th className="px-3 py-2 text-center text-xs font-bold text-muted-foreground min-w-[56px]">Jami</th>
+                      <th className="px-3 py-2 text-center text-xs font-bold text-muted-foreground min-w-[54px]">Soat</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/20">
@@ -249,7 +276,8 @@ export default function AttendanceHistory() {
                       const totalHours = empRecs.reduce((acc, r) => acc + (r?.workHours ?? 0), 0);
                       return (
                         <tr key={emp.id} className="hover:bg-muted/10 transition-colors">
-                          <td className="px-4 py-2 sticky left-0 bg-card">
+                          {/* Sticky name */}
+                          <td className="px-4 py-2 bg-card sticky left-0 z-10">
                             <div className="flex items-center gap-2">
                               <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-[10px] shrink-0">
                                 {emp.firstName[0]}{emp.lastName[0]}
@@ -259,9 +287,11 @@ export default function AttendanceHistory() {
                               </span>
                             </div>
                           </td>
+                          {/* Day cells */}
                           {days.map((d, i) => (
-                            <DayCell key={d.toISOString()} rec={empRecs[i]} date={d} />
+                            <DayCell key={d.toISOString()} rec={empRecs[i]} />
                           ))}
+                          {/* Totals */}
                           <td className="px-3 py-2 text-center">
                             <span className="text-sm font-bold text-foreground">{presentDays}</span>
                             <span className="text-xs text-muted-foreground">/{days.length}</span>
