@@ -243,6 +243,7 @@ router.get("/range", requireRole("superadmin", "admin"), async (req: AuthRequest
       checkIn: attendanceTable.checkIn,
       checkOut: attendanceTable.checkOut,
       workHours: attendanceTable.workHours,
+      partialValue: attendanceTable.partialValue,
       note: attendanceTable.note,
       editCount: attendanceTable.editCount,
     })

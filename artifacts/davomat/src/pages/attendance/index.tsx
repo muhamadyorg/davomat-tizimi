@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 type Tab = "kunlik" | "haftalik" | "oyunchi" | "oylik";
-type StatusType = "present" | "absent" | "late" | "on_leave" | "early_leave";
+type StatusType = "present" | "absent" | "late" | "on_leave" | "early_leave" | "partial";
 
 const STATUS_CELL: Record<StatusType, { emoji: string; label: string; cls: string }> = {
   present:     { emoji: "✓", label: "Keldi",      cls: "bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300" },
@@ -16,10 +16,11 @@ const STATUS_CELL: Record<StatusType, { emoji: string; label: string; cls: strin
   absent:      { emoji: "✗", label: "Kelmadi",    cls: "bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300" },
   on_leave:    { emoji: "T", label: "Ta'tilda",   cls: "bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300" },
   early_leave: { emoji: "E", label: "Erta ketdi", cls: "bg-yellow-100 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-300" },
+  partial:     { emoji: "S", label: "Smena",      cls: "bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-300" },
 };
 
 interface Emp { id: number; firstName: string; lastName: string; departmentId: number | null; departmentName: string | null; role: string; }
-interface AttRec { id: number; userId: number; date: string; status: StatusType; checkIn: string | null; checkOut: string | null; workHours: number; note: string | null; }
+interface AttRec { id: number; userId: number; date: string; status: StatusType; checkIn: string | null; checkOut: string | null; workHours: number; note: string | null; partialValue?: number | null; }
 
 function getDateRange(tab: Tab, anchor: Date): { start: Date; end: Date; label: string } {
   switch (tab) {
@@ -54,9 +55,10 @@ function DayCell({ rec }: { rec?: AttRec }) {
     );
   }
 
-  const s = STATUS_CELL[rec.status];
+  const s = STATUS_CELL[rec.status] ?? STATUS_CELL["absent"];
   const timeIn  = rec.checkIn  ? format(new Date(rec.checkIn),  "HH:mm") : "";
   const timeOut = rec.checkOut ? format(new Date(rec.checkOut), "HH:mm") : "";
+  const displayEmoji = rec.status === "partial" && rec.partialValue ? String(rec.partialValue) : s.emoji;
 
   return (
     <td className="p-0.5">
@@ -64,9 +66,9 @@ function DayCell({ rec }: { rec?: AttRec }) {
         onMouseEnter={(e) => setTipPos({ x: e.clientX, y: e.clientY })}
         onMouseLeave={() => setTipPos(null)}
         onMouseMove={(e) => setTipPos({ x: e.clientX, y: e.clientY })}
-        className={cn("w-8 h-8 rounded-md flex items-center justify-center text-xs font-bold transition-colors", s.cls)}
+        className={cn("w-8 h-8 rounded-md flex items-center justify-center text-[10px] font-bold transition-colors", s.cls)}
       >
-        {s.emoji}
+        {displayEmoji}
       </button>
 
       {tipPos && createPortal(
@@ -81,7 +83,9 @@ function DayCell({ rec }: { rec?: AttRec }) {
           }}
           className="bg-card border border-border rounded-xl shadow-2xl p-3 min-w-[170px] text-left"
         >
-          <div className={cn("text-xs font-bold mb-1.5", s.cls.split(" ").filter(c => c.startsWith("text-")).join(" "))}>{s.label}</div>
+          <div className={cn("text-xs font-bold mb-1.5", s.cls.split(" ").filter(c => c.startsWith("text-")).join(" "))}>
+            {s.label}{rec.status === "partial" && rec.partialValue ? ` (${rec.partialValue} kun)` : ""}
+          </div>
           {timeIn  && <div className="text-[11px] text-muted-foreground font-mono">Keldi: {timeIn}</div>}
           {timeOut && <div className="text-[11px] text-muted-foreground font-mono">Ketdi: {timeOut}</div>}
           {rec.workHours > 0 && <div className="text-[11px] text-muted-foreground mt-0.5">{rec.workHours.toFixed(1)} soat ishladi</div>}
@@ -220,7 +224,7 @@ export default function AttendanceHistory() {
 
         {/* Legend */}
         <div className="flex gap-1.5 flex-wrap">
-          {(["present", "late", "absent", "on_leave"] as StatusType[]).map(k => {
+          {(["present", "partial", "absent", "on_leave"] as StatusType[]).map(k => {
             const v = STATUS_CELL[k];
             return (
               <span key={k} className={cn("text-[10px] font-bold px-2 py-0.5 rounded-md", v.cls)}>
@@ -265,14 +269,19 @@ export default function AttendanceHistory() {
                           <div className="text-[9px] text-muted-foreground/50 mt-0.5">{WEEK_DAYS[d.getDay()]}</div>
                         </th>
                       ))}
-                      <th className="px-3 py-2 text-center text-xs font-bold text-muted-foreground min-w-[56px]">Jami</th>
+                      <th className="px-3 py-2 text-center text-xs font-bold text-muted-foreground min-w-[60px]">Jami kun</th>
                       <th className="px-3 py-2 text-center text-xs font-bold text-muted-foreground min-w-[54px]">Soat</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/20">
                     {emps.map(emp => {
                       const empRecs = days.map(d => recMap.get(`${emp.id}_${format(d, "yyyy-MM-dd")}`));
-                      const presentDays = empRecs.filter(r => r && (r.status === "present" || r.status === "late")).length;
+                      const totalDays = empRecs.reduce((acc, r) => {
+                        if (!r) return acc;
+                        if (r.status === "present" || r.status === "late") return acc + 1;
+                        if (r.status === "partial" && r.partialValue) return acc + r.partialValue;
+                        return acc;
+                      }, 0);
                       const totalHours = empRecs.reduce((acc, r) => acc + (r?.workHours ?? 0), 0);
                       return (
                         <tr key={emp.id} className="hover:bg-muted/10 transition-colors">
@@ -293,7 +302,7 @@ export default function AttendanceHistory() {
                           ))}
                           {/* Totals */}
                           <td className="px-3 py-2 text-center">
-                            <span className="text-sm font-bold text-foreground">{presentDays}</span>
+                            <span className="text-sm font-bold text-foreground">{Number.isInteger(totalDays) ? totalDays : totalDays.toFixed(1)}</span>
                             <span className="text-xs text-muted-foreground">/{days.length}</span>
                           </td>
                           <td className="px-3 py-2 text-center">
