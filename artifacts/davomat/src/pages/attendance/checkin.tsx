@@ -7,15 +7,14 @@ import { cn } from "@/lib/utils";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-type Status = "present" | "absent" | "late" | "on_leave" | "partial";
+type Status = "present" | "absent" | "late" | "partial";
 
 const PARTIAL_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 
 const STATUSES: { value: Status; label: string; emoji: string; color: string; bg: string }[] = [
-  { value: "present",  label: "Keldi",    emoji: "✓", color: "text-green-700 dark:text-green-400",  bg: "bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/30" },
-  { value: "absent",   label: "Kelmadi",  emoji: "✗", color: "text-red-700 dark:text-red-400",    bg: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30" },
-  { value: "on_leave", label: "Ta'tilda", emoji: "T", color: "text-blue-700 dark:text-blue-400",   bg: "bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/30" },
-  { value: "partial",  label: "Smena",    emoji: "S", color: "text-orange-700 dark:text-orange-400", bg: "bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30" },
+  { value: "present", label: "Keldi",   emoji: "✓", color: "text-green-700 dark:text-green-400",   bg: "bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/30" },
+  { value: "absent",  label: "Kelmadi", emoji: "✗", color: "text-red-700 dark:text-red-400",     bg: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30" },
+  { value: "partial", label: "Smena",   emoji: "S", color: "text-orange-700 dark:text-orange-400", bg: "bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30" },
 ];
 
 interface EmpRow {
@@ -198,7 +197,6 @@ export default function AttendanceMark() {
   const presentCount = Object.values(rows).filter(r => r.status === "present").length;
   const partialCount = Object.values(rows).filter(r => r.status === "partial").length;
   const absentCount = Object.values(rows).filter(r => r.status === "absent").length;
-  const leaveCount = Object.values(rows).filter(r => r.status === "on_leave").length;
 
   return (
     <div className="space-y-5">
@@ -245,10 +243,9 @@ export default function AttendanceMark() {
         </div>
         <div className="flex gap-2 items-center pb-0.5 flex-wrap">
           {[
-            { label: "Keldi",   val: presentCount, color: "text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 border-green-100 dark:border-green-500/20" },
-            { label: "Smena",   val: partialCount,  color: "text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10 border-orange-100 dark:border-orange-500/20" },
-            { label: "Kelmadi", val: absentCount,  color: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 border-red-100 dark:border-red-500/20" },
-            { label: "Ta'til",  val: leaveCount,   color: "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 border-blue-100 dark:border-blue-500/20" },
+            { label: "Keldi",   val: presentCount,   color: "text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 border-green-100 dark:border-green-500/20" },
+            { label: "Smena",   val: partialCount,   color: "text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10 border-orange-100 dark:border-orange-500/20" },
+            { label: "Kelmadi", val: absentCount,    color: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 border-red-100 dark:border-red-500/20" },
             { label: "Jami",    val: entries.length, color: "text-foreground bg-muted border-border/50" },
           ].map(s => (
             <div key={s.label} className={cn("text-center px-3 py-1.5 rounded-lg border", s.color)}>
@@ -290,8 +287,8 @@ export default function AttendanceMark() {
                     {list.map(({ employee }) => {
                       const row = rows[employee.id];
                       if (!row) return null;
-                      const st = STATUSES.find(s => s.value === row.status)!;
-                      const noTime = row.status === "absent" || row.status === "on_leave";
+                      const st = STATUSES.find(s => s.value === row.status) ?? STATUSES[1];
+                      const noTime = row.status === "absent";
 
                       return (
                         <tr key={employee.id} className={cn(

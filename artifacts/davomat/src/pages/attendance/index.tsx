@@ -224,7 +224,7 @@ export default function AttendanceHistory() {
 
         {/* Legend */}
         <div className="flex gap-1.5 flex-wrap">
-          {(["present", "partial", "absent", "on_leave"] as StatusType[]).map(k => {
+          {(["present", "partial", "absent"] as StatusType[]).map(k => {
             const v = STATUS_CELL[k];
             return (
               <span key={k} className={cn("text-[10px] font-bold px-2 py-0.5 rounded-md", v.cls)}>
