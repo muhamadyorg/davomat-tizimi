@@ -2,7 +2,7 @@ import { pgTable, serial, integer, text, timestamp, date, pgEnum, real } from "d
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const attendanceStatusEnum = pgEnum("attendance_status", ["present", "absent", "late", "early_leave", "on_leave"]);
+export const attendanceStatusEnum = pgEnum("attendance_status", ["present", "absent", "late", "early_leave", "on_leave", "partial"]);
 
 export const attendanceTable = pgTable("attendance", {
   id: serial("id").primaryKey(),
@@ -14,6 +14,7 @@ export const attendanceTable = pgTable("attendance", {
   lateMinutes: integer("late_minutes").notNull().default(0),
   earlyLeaveMinutes: integer("early_leave_minutes").notNull().default(0),
   workHours: real("work_hours").notNull().default(0),
+  partialValue: real("partial_value"),
   note: text("note"),
   editCount: integer("edit_count").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),

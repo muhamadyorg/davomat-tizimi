@@ -95,6 +95,7 @@ router.get("/daily", requireRole("superadmin", "admin"), async (req: AuthRequest
         note: att.note,
         lateMinutes: att.lateMinutes,
         workHours: att.workHours,
+        partialValue: att.partialValue,
         editCount: att.editCount,
       } : null,
     };
@@ -105,7 +106,7 @@ router.get("/daily", requireRole("superadmin", "admin"), async (req: AuthRequest
 
 // Admin: mark/update attendance for an employee on a date (with editCount limit)
 router.post("/mark", requireRole("superadmin", "admin"), async (req: AuthRequest, res: Response) => {
-  const { userId, date, status, checkIn, checkOut, note } = req.body;
+  const { userId, date, status, checkIn, checkOut, note, partialValue } = req.body;
   const actorRole = req.user!.role;
 
   if (!userId || !date || !status) {
@@ -158,6 +159,7 @@ router.post("/mark", requireRole("superadmin", "admin"), async (req: AuthRequest
         note: note || null,
         lateMinutes,
         workHours,
+        partialValue: status === "partial" ? (partialValue ?? null) : null,
         editCount: currentEdits + 1,
         updatedAt: new Date(),
       })
@@ -180,6 +182,7 @@ router.post("/mark", requireRole("superadmin", "admin"), async (req: AuthRequest
       lateMinutes,
       earlyLeaveMinutes: 0,
       workHours,
+      partialValue: status === "partial" ? (partialValue ?? null) : null,
       editCount: 1,
     })
     .returning();

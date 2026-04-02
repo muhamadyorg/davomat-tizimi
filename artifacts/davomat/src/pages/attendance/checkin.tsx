@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useListDepartments } from "@workspace/api-client-react";
 import { useAuth } from "@/lib/auth";
 import { format } from "date-fns";
@@ -7,13 +7,15 @@ import { cn } from "@/lib/utils";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-type Status = "present" | "absent" | "late" | "on_leave";
+type Status = "present" | "absent" | "late" | "on_leave" | "partial";
+
+const PARTIAL_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 
 const STATUSES: { value: Status; label: string; emoji: string; color: string; bg: string }[] = [
-  { value: "present",  label: "Keldi",       emoji: "✓", color: "text-green-700 dark:text-green-400",  bg: "bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/30" },
-  { value: "absent",   label: "Kelmadi",     emoji: "✗", color: "text-red-700 dark:text-red-400",    bg: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30" },
-  { value: "on_leave", label: "Ta'tilda",    emoji: "T", color: "text-blue-700 dark:text-blue-400",   bg: "bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/30" },
-  { value: "late",     label: "Kech keldi",  emoji: "K", color: "text-orange-700 dark:text-orange-400", bg: "bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30" },
+  { value: "present",  label: "Keldi",    emoji: "✓", color: "text-green-700 dark:text-green-400",  bg: "bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/30" },
+  { value: "absent",   label: "Kelmadi",  emoji: "✗", color: "text-red-700 dark:text-red-400",    bg: "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/30" },
+  { value: "on_leave", label: "Ta'tilda", emoji: "T", color: "text-blue-700 dark:text-blue-400",   bg: "bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/30" },
+  { value: "partial",  label: "Smena",    emoji: "S", color: "text-orange-700 dark:text-orange-400", bg: "bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30" },
 ];
 
 interface EmpRow {
@@ -32,11 +34,13 @@ interface AttRec {
   checkIn: string | null;
   checkOut: string | null;
   note: string | null;
+  partialValue: number | null;
   editCount: number;
 }
 
 interface RowState {
   status: Status;
+  partialValue: number | null;
   checkIn: string;
   checkOut: string;
   note: string;
@@ -45,6 +49,7 @@ interface RowState {
   locked: boolean;
   error: string;
   attId: number | null;
+  showPartialPicker: boolean;
 }
 
 export default function AttendanceMark() {
@@ -58,6 +63,7 @@ export default function AttendanceMark() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [savingAll, setSavingAll] = useState(false);
   const [savingNote, setSavingNote] = useState<Record<number, boolean>>({});
+  const pickerRef = useRef<HTMLDivElement>(null);
 
   const isSuperAdmin = user?.role === "superadmin";
   const maxEdits = isSuperAdmin ? 2 : 1;
@@ -81,10 +87,12 @@ export default function AttendanceMark() {
         const locked = att ? edits >= maxEdits : false;
         init[employee.id] = {
           status: att?.status ?? "absent",
+          partialValue: att?.partialValue ?? null,
           checkIn: ci, checkOut: co,
           note: att?.note ?? "",
           saving: false, saved: !!att, locked,
           error: "", attId: att?.id ?? null,
+          showPartialPicker: false,
         };
       });
       setRows(init);
@@ -99,9 +107,34 @@ export default function AttendanceMark() {
     setRows(p => ({ ...p, [id]: { ...p[id], [field]: val, error: "" } }));
   };
 
+  const setStatusAndPartial = (empId: number, status: Status, partialValue?: number) => {
+    setRows(p => ({
+      ...p,
+      [empId]: {
+        ...p[empId],
+        status,
+        partialValue: status === "partial" ? (partialValue ?? p[empId].partialValue) : null,
+        showPartialPicker: false,
+        error: "",
+      }
+    }));
+  };
+
+  const handleStatusClick = (empId: number, s: Status) => {
+    if (s === "partial") {
+      setRows(p => ({ ...p, [empId]: { ...p[empId], showPartialPicker: !p[empId].showPartialPicker, error: "" } }));
+    } else {
+      setStatusAndPartial(empId, s);
+    }
+  };
+
   const saveOne = async (empId: number): Promise<boolean> => {
     const row = rows[empId];
     if (row.locked) return true;
+    if (row.status === "partial" && !row.partialValue) {
+      setRows(p => ({ ...p, [empId]: { ...p[empId], error: "Smena qiymatini tanlang" } }));
+      return false;
+    }
     setRows(p => ({ ...p, [empId]: { ...p[empId], saving: true, error: "" } }));
     try {
       const res = await fetch(`${BASE}/api/attendance/mark`, {
@@ -113,6 +146,7 @@ export default function AttendanceMark() {
           checkIn: row.checkIn || null,
           checkOut: row.checkOut || null,
           note: row.note || null,
+          partialValue: row.status === "partial" ? row.partialValue : null,
         }),
       });
       const data = await res.json();
@@ -154,7 +188,6 @@ export default function AttendanceMark() {
     setSavingAll(false);
   };
 
-  // Group by department
   const grouped: Record<string, typeof entries> = {};
   entries.forEach(e => {
     const d = e.employee.departmentName || "Bo'limsiz";
@@ -162,13 +195,13 @@ export default function AttendanceMark() {
     grouped[d].push(e);
   });
 
-  const presentCount = Object.values(rows).filter(r => r.status === "present" || r.status === "late").length;
+  const presentCount = Object.values(rows).filter(r => r.status === "present").length;
+  const partialCount = Object.values(rows).filter(r => r.status === "partial").length;
   const absentCount = Object.values(rows).filter(r => r.status === "absent").length;
   const leaveCount = Object.values(rows).filter(r => r.status === "on_leave").length;
 
   return (
     <div className="space-y-5">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-foreground font-display">Davomat belgilash</h1>
@@ -210,12 +243,13 @@ export default function AttendanceMark() {
             </select>
           </div>
         </div>
-        <div className="flex gap-2 items-center pb-0.5">
+        <div className="flex gap-2 items-center pb-0.5 flex-wrap">
           {[
-            { label: "Keldi", val: presentCount, color: "text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 border-green-100 dark:border-green-500/20" },
-            { label: "Kelmadi", val: absentCount, color: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 border-red-100 dark:border-red-500/20" },
-            { label: "Ta'til", val: leaveCount, color: "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 border-blue-100 dark:border-blue-500/20" },
-            { label: "Jami", val: entries.length, color: "text-foreground bg-muted border-border/50" },
+            { label: "Keldi",   val: presentCount, color: "text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 border-green-100 dark:border-green-500/20" },
+            { label: "Smena",   val: partialCount,  color: "text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10 border-orange-100 dark:border-orange-500/20" },
+            { label: "Kelmadi", val: absentCount,  color: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 border-red-100 dark:border-red-500/20" },
+            { label: "Ta'til",  val: leaveCount,   color: "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 border-blue-100 dark:border-blue-500/20" },
+            { label: "Jami",    val: entries.length, color: "text-foreground bg-muted border-border/50" },
           ].map(s => (
             <div key={s.label} className={cn("text-center px-3 py-1.5 rounded-lg border", s.color)}>
               <div className="text-base font-bold">{s.val}</div>
@@ -245,7 +279,7 @@ export default function AttendanceMark() {
                   <thead>
                     <tr className="border-b border-border/30 text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
                       <th className="px-4 py-2.5 text-left w-[200px]">Xodim</th>
-                      <th className="px-3 py-2.5 text-left w-[180px]">Holat</th>
+                      <th className="px-3 py-2.5 text-left w-[200px]">Holat</th>
                       <th className="px-3 py-2.5 text-left w-[110px]">Kelish</th>
                       <th className="px-3 py-2.5 text-left w-[110px]">Ketish</th>
                       <th className="px-3 py-2.5 text-left">Izoh</th>
@@ -288,25 +322,51 @@ export default function AttendanceMark() {
                           <td className="px-3 py-2.5">
                             {row.locked ? (
                               <span className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-semibold", st.bg, st.color)}>
-                                {st.emoji} {st.label}
+                                {st.emoji}
+                                {row.status === "partial" && row.partialValue ? ` ${row.partialValue}` : ` ${st.label}`}
                               </span>
                             ) : (
-                              <div className="flex gap-1">
-                                {STATUSES.map(s => (
-                                  <button
-                                    key={s.value}
-                                    onClick={() => updateRow(employee.id, "status", s.value)}
-                                    title={s.label}
-                                    className={cn(
-                                      "w-7 h-7 rounded-lg border text-xs font-bold transition-all",
-                                      row.status === s.value
-                                        ? cn(s.bg, s.color, "shadow-sm scale-105")
-                                        : "bg-muted/50 text-muted-foreground border-border/50 hover:border-primary/30"
-                                    )}
-                                  >
-                                    {s.emoji}
-                                  </button>
-                                ))}
+                              <div className="flex flex-col gap-1">
+                                <div className="flex gap-1">
+                                  {STATUSES.map(s => (
+                                    <div key={s.value} className="relative">
+                                      <button
+                                        onClick={() => handleStatusClick(employee.id, s.value)}
+                                        title={s.label}
+                                        className={cn(
+                                          "w-7 h-7 rounded-lg border text-xs font-bold transition-all",
+                                          row.status === s.value
+                                            ? cn(s.bg, s.color, "shadow-sm scale-105")
+                                            : "bg-muted/50 text-muted-foreground border-border/50 hover:border-primary/30"
+                                        )}
+                                      >
+                                        {s.value === "partial" && row.status === "partial" && row.partialValue
+                                          ? row.partialValue
+                                          : s.emoji}
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+
+                                {/* Partial value picker */}
+                                {row.showPartialPicker && (
+                                  <div ref={pickerRef} className="flex flex-wrap gap-1 p-2 bg-background border border-orange-200 dark:border-orange-500/30 rounded-xl shadow-lg">
+                                    {PARTIAL_VALUES.map(v => (
+                                      <button
+                                        key={v}
+                                        onClick={() => setStatusAndPartial(employee.id, "partial", v)}
+                                        className={cn(
+                                          "w-8 h-7 rounded-lg text-xs font-bold border transition-all",
+                                          row.partialValue === v
+                                            ? "bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-400 border-orange-300 dark:border-orange-500/50 scale-105"
+                                            : "bg-muted/50 text-muted-foreground border-border/50 hover:border-orange-300 hover:text-orange-600"
+                                        )}
+                                      >
+                                        {v}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
                             )}
                           </td>
@@ -325,7 +385,7 @@ export default function AttendanceMark() {
                               className="w-full px-2 py-1.5 bg-background border border-border rounded-lg text-xs font-mono focus:ring-2 focus:ring-primary/20 disabled:opacity-30 disabled:cursor-not-allowed" />
                           </td>
 
-                          {/* Note - always editable */}
+                          {/* Note */}
                           <td className="px-3 py-2.5">
                             <div className="flex items-center gap-1">
                               <input type="text" value={row.note} onChange={e => updateRow(employee.id, "note", e.target.value)}
