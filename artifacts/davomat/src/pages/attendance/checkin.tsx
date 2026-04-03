@@ -347,7 +347,7 @@ export default function AttendanceMark() {
 
                                 {/* Partial value picker */}
                                 {row.showPartialPicker && (
-                                  <div ref={pickerRef} className="flex flex-wrap gap-1 p-2 bg-background border border-orange-200 dark:border-orange-500/30 rounded-xl shadow-lg">
+                                  <div ref={pickerRef} className="grid grid-cols-3 gap-1 p-2 bg-background border border-orange-200 dark:border-orange-500/30 rounded-xl shadow-lg">
                                     {PARTIAL_VALUES.map(v => (
                                       <button
                                         key={v}
