@@ -1,0 +1,85 @@
+
+  ██████╗  █████╗ ██╗   ██╗ ██████╗ ███╗   ███╗ █████╗ ████████╗
+  ██╔══██╗██╔══██╗██║   ██║██╔═══██╗████╗ ████║██╔══██╗╚══██╔══╝
+  ██║  ██║███████║██║   ██║██║   ██║██╔████╔██║███████║   ██║   
+  ██║  ██║██╔══██║╚██╗ ██╔╝██║   ██║██║╚██╔╝██║██╔══██║   ██║   
+  ██████╔╝██║  ██║ ╚████╔╝ ╚██████╔╝██║ ╚═╝ ██║██║  ██║   ██║   
+  ╚═════╝ ╚═╝  ╚═╝  ╚═══╝   ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝   ╚═╝   
+
+         Davomat Tizimi — VPS O'rnatish Skripti
+──────────────────────────────────────────────
+
+Bir necha savol beramiz, so'ng hammasini avtomatik qilamiz.
+
+Domeningiz nomi [masalan: davomat.uz, bo'lmasa Enter bosing]: davomat.muhamadyorg.uz
+PostgreSQL parol [bo'sh qoldirsa avtomatik yaratiladi]: 
+⚠ Avtomatik DB parol: lUqSvqOOqvBQwKLrP6Vt (eslab qoling!)
+──────────────────────────────────────────────
+
+▶ O'rnatish boshlandi...
+
+──────────────────────────────────────────────
+▶ [1/9] Tizim yangilanmoqda...
+✔ Tizim yangilandi
+──────────────────────────────────────────────
+▶ [2/9] Node.js 20 o'rnatilmoqda...
+✔ Node.js v20.20.1 allaqachon mavjud
+✔ pnpm allaqachon mavjud
+✔ PM2 allaqachon mavjud
+──────────────────────────────────────────────
+▶ [3/9] PostgreSQL o'rnatilmoqda...
+✔ PostgreSQL allaqachon mavjud
+✔ PostgreSQL baza tayyorlandi: davomat_db
+──────────────────────────────────────────────
+▶ [4/9] Nginx o'rnatilmoqda...
+✔ Nginx allaqachon mavjud
+──────────────────────────────────────────────
+▶ [5/9] Kod GitHub'dan yuklanmoqda...
+✔ Kod yuklandi: /opt/davomat-tizimi
+──────────────────────────────────────────────
+▶ [6/9] .env fayli yaratilmoqda...
+✔ .env fayli yaratildi
+──────────────────────────────────────────────
+▶ [7/9] Paketlar o'rnatilmoqda (1-2 daqiqa kutiladi)...
+✔ Paketlar o'rnatildi
+▶     Backend build qilinmoqda...
+
+> @workspace/api-server@0.0.0 build /opt/davomat-tizimi/artifacts/api-server
+> node ./build.mjs --silent
+
+
+  dist/index.mjs                       2.3mb ⚠️
+  dist/pino-worker.mjs               153.4kb
+  dist/pino-file.mjs                 142.1kb
+  dist/pino-pretty.mjs               114.6kb
+  dist/thread-stream-worker.mjs        7.3kb
+  dist/index.mjs.map                   3.9mb
+  dist/pino-worker.mjs.map           256.9kb
+  dist/pino-file.mjs.map             229.0kb
+  dist/pino-pretty.mjs.map           203.9kb
+  dist/thread-stream-worker.mjs.map   12.0kb
+
+⚡ Done in 258ms
+✔     Backend build tayyor
+▶     Frontend build qilinmoqda...
+
+> @workspace/davomat@0.0.0 build /opt/davomat-tizimi/artifacts/davomat
+> vite build --config vite.config.ts --silent
+
+file:///opt/davomat-tizimi/node_modules/.pnpm/vite@7.3.1_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/cli.js:311
+                        for (const name of Object.keys(options)) if (name !== "--" && !this.hasOption(name) && !globalCommand.hasOption(name)) throw new CACError(`Unknown option \`${name.length > 1 ? `--${name}` : `-${name}`}\``);
+                                                                                                                                                     ^
+
+CACError: Unknown option `--silent`
+    at Command.checkUnknownOptions (file:///opt/davomat-tizimi/node_modules/.pnpm/vite@7.3.1_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/cli.js:311:129)
+    at CAC.runMatchedCommand (file:///opt/davomat-tizimi/node_modules/.pnpm/vite@7.3.1_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/cli.js:473:11)
+    at CAC.parse (file:///opt/davomat-tizimi/node_modules/.pnpm/vite@7.3.1_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/cli.js:430:17)
+    at file:///opt/davomat-tizimi/node_modules/.pnpm/vite@7.3.1_@types+node@25.3.5_jiti@2.6.1_lightningcss@1.31.1_tsx@4.21.0_yaml@2.8.2/node_modules/vite/dist/node/cli.js:695:5
+    at ModuleJob.run (node:internal/modules/esm/module_job:325:25)
+    at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
+
+Node.js v20.20.1
+/opt/davomat-tizimi/artifacts/davomat:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @workspace/davomat@0.0.0 build: `vite build --config vite.config.ts --silent`
+Exit status 1
+root@ubuntu-8gb-hel1-2:/www/server/davomat-tizimi# 
