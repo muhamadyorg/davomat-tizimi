@@ -1,364 +1,207 @@
 #!/bin/bash
+# ─────────────────────────────────────────────────────
+#  Davomat Tizimi — Update & Fix Script
+#  Ishlatish: bash deploy.sh
+# ─────────────────────────────────────────────────────
 set -e
 
-# ─────────────────────────────────────────
-#  Ranglar
-# ─────────────────────────────────────────
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
+err()  { echo -e "${RED}[XATO]${NC} $1"; exit 1; }
+info() { echo -e "${CYAN}[....] $1${NC}"; }
+warn() { echo -e "${YELLOW}[!!!!] $1${NC}"; }
 
-ok()   { echo -e "${GREEN}✔ $1${NC}"; }
-info() { echo -e "${BLUE}▶ $1${NC}"; }
-warn() { echo -e "${YELLOW}⚠ $1${NC}"; }
-fail() { echo -e "${RED}✘ $1${NC}"; exit 1; }
-sep()  { echo -e "${CYAN}──────────────────────────────────────────────${NC}"; }
+APP_DIR="/www/server/davomat-tizimi"
+WEB_DIR="/www/wwwroot/hr.muhamadyorg.uz"
+PM2_NAME="davomat-api"
+API_PORT="3001"
+ECOSYSTEM="$APP_DIR/ecosystem.config.cjs"
 
-# ─────────────────────────────────────────
-#  Root tekshirish
-# ─────────────────────────────────────────
-if [ "$EUID" -ne 0 ]; then
-  fail "Iltimos sudo bilan ishga tushiring: sudo bash deploy.sh"
-fi
-
-clear
-echo -e "${BOLD}${CYAN}"
-echo "  ██████╗  █████╗ ██╗   ██╗ ██████╗ ███╗   ███╗ █████╗ ████████╗"
-echo "  ██╔══██╗██╔══██╗██║   ██║██╔═══██╗████╗ ████║██╔══██╗╚══██╔══╝"
-echo "  ██║  ██║███████║██║   ██║██║   ██║██╔████╔██║███████║   ██║   "
-echo "  ██║  ██║██╔══██║╚██╗ ██╔╝██║   ██║██║╚██╔╝██║██╔══██║   ██║   "
-echo "  ██████╔╝██║  ██║ ╚████╔╝ ╚██████╔╝██║ ╚═╝ ██║██║  ██║   ██║   "
-echo "  ╚═════╝ ╚═╝  ╚═╝  ╚═══╝   ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝   ╚═╝   "
-echo -e "${NC}"
-echo -e "${BOLD}         Davomat Tizimi — VPS O'rnatish Skripti${NC}"
-sep
-
-# ─────────────────────────────────────────
-#  Foydalanuvchi ma'lumotlarini so'rash
-# ─────────────────────────────────────────
 echo ""
-echo -e "${BOLD}Bir necha savol beramiz, so'ng hammasini avtomatik qilamiz.${NC}"
+echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
+echo -e "${CYAN}║     Davomat Tizimi — Update & Fix        ║${NC}"
+echo -e "${CYAN}╚══════════════════════════════════════════╝${NC}"
 echo ""
 
-read -p "$(echo -e ${YELLOW}Domeningiz nomi [masalan: davomat.uz, bo\'lmasa Enter bosing]: ${NC})" DOMAIN
-DOMAIN=$(echo "$DOMAIN" | xargs)
+# ── 1. Papka ─────────────────────────────
+info "1/7 Papka tekshirilmoqda..."
+[ -d "$APP_DIR" ] || err "Papka topilmadi: $APP_DIR"
+cd "$APP_DIR"
+ok "Papka: $APP_DIR"
 
-read -p "$(echo -e ${YELLOW}PostgreSQL parol [bo\'sh qoldirsa avtomatik yaratiladi]: ${NC})" DB_PASS
-DB_PASS=$(echo "$DB_PASS" | xargs)
-if [ -z "$DB_PASS" ]; then
-  DB_PASS=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 20)
-  warn "Avtomatik DB parol: $DB_PASS (eslab qoling!)"
+# ── 2. DATABASE_URL topish ────────────────
+info "2/7 Database ulanishi aniqlanmoqda..."
+
+# .env fayldan o'qish
+[ -f "$APP_DIR/.env" ] && export $(grep -v '^#' "$APP_DIR/.env" | xargs) 2>/dev/null || true
+
+# Ecosystem fayldan o'qish
+if [ -z "$DATABASE_URL" ] && [ -f "$ECOSYSTEM" ]; then
+  DB_TMP=$(grep -oP "DATABASE_URL:\s*'\K[^']+" "$ECOSYSTEM" 2>/dev/null || true)
+  [ -n "$DB_TMP" ] && export DATABASE_URL="$DB_TMP"
 fi
 
-SESSION_SECRET=$(openssl rand -base64 32)
+# PM2 dan o'qish
+if [ -z "$DATABASE_URL" ]; then
+  DB_TMP=$(pm2 env "$PM2_NAME" 2>/dev/null | grep -oP "DATABASE_URL.*'\K[^']+" || true)
+  [ -n "$DB_TMP" ] && export DATABASE_URL="$DB_TMP"
+fi
 
-REPO_URL="https://github.com/muhamadyorg/davomat-tizimi.git"
-APP_DIR="/opt/davomat-tizimi"
-DB_NAME="davomat_db"
-DB_USER="davomat"
-API_PORT=3001
+# Postgres user bilan avto-topish
+if [ -z "$DATABASE_URL" ]; then
+  warn "DATABASE_URL topilmadi — postgres user bilan avto-tanlanmoqda..."
+  DB_NAME=$(sudo -u postgres psql -tAc "SELECT datname FROM pg_database WHERE datname NOT IN ('postgres','template0','template1') ORDER BY datname LIMIT 1;" 2>/dev/null || echo "")
+  if [ -n "$DB_NAME" ]; then
+    export DATABASE_URL="postgresql://postgres@localhost:5432/$DB_NAME"
+    warn "Topildi: $DATABASE_URL"
+  fi
+fi
 
-sep
-echo ""
-info "O'rnatish boshlandi..."
-echo ""
-
-# ─────────────────────────────────────────
-#  1. Tizimni yangilash
-# ─────────────────────────────────────────
-sep
-info "[1/9] Tizim yangilanmoqda..."
-apt-get update -qq
-apt-get install -y -qq curl wget git openssl software-properties-common build-essential
-ok "Tizim yangilandi"
-
-# ─────────────────────────────────────────
-#  2. Node.js 20 o'rnatish
-# ─────────────────────────────────────────
-sep
-info "[2/9] Node.js 20 o'rnatilmoqda..."
-if ! command -v node &>/dev/null || [[ "$(node -v 2>/dev/null | cut -d'.' -f1 | tr -d 'v')" -lt 20 ]]; then
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
-  apt-get install -y -qq nodejs
-  ok "Node.js $(node -v) o'rnatildi"
+# Ulanishni sinash
+if psql "$DATABASE_URL" -c "SELECT 1;" >/dev/null 2>&1; then
+  ok "Database ulandi"
+elif sudo -u postgres psql -c "SELECT 1;" >/dev/null 2>&1; then
+  # sudo -u postgres bilan ishlaydi — DATABASE_URL ni tuzatamiz
+  DB_NAME=$(sudo -u postgres psql -tAc "SELECT datname FROM pg_database WHERE datname NOT IN ('postgres','template0','template1') ORDER BY datname LIMIT 1;" 2>/dev/null || echo "davomat_db")
+  export DATABASE_URL="postgresql://postgres@localhost:5432/$DB_NAME"
+  ok "Database postgres user bilan ulandi"
 else
-  ok "Node.js $(node -v) allaqachon mavjud"
+  echo ""
+  warn "Database ulanmadi! Quyidagi ma'lumotlarni kiriting:"
+  read -p "PostgreSQL foydalanuvchi nomi [postgres]: " DB_USER
+  DB_USER="${DB_USER:-postgres}"
+  read -s -p "PostgreSQL paroli: " DB_PASS
+  echo ""
+  read -p "Database nomi [davomat_db]: " DB_NAME
+  DB_NAME="${DB_NAME:-davomat_db}"
+  if [ -z "$DB_PASS" ]; then
+    export DATABASE_URL="postgresql://${DB_USER}@localhost:5432/${DB_NAME}"
+  else
+    export DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}"
+  fi
+  psql "$DATABASE_URL" -c "SELECT 1;" >/dev/null 2>&1 || err "Database ulanmadi: $DATABASE_URL"
+  ok "Database ulandi"
 fi
 
-if ! command -v pnpm &>/dev/null; then
-  npm install -g pnpm --silent
-  ok "pnpm o'rnatildi"
-else
-  ok "pnpm allaqachon mavjud"
+# SESSION_SECRET
+if [ -z "$SESSION_SECRET" ]; then
+  export SESSION_SECRET=$(openssl rand -base64 32)
 fi
 
-if ! command -v pm2 &>/dev/null; then
-  npm install -g pm2 --silent
-  ok "PM2 o'rnatildi"
-else
-  ok "PM2 allaqachon mavjud"
-fi
-
-# ─────────────────────────────────────────
-#  3. PostgreSQL o'rnatish
-# ─────────────────────────────────────────
-sep
-info "[3/9] PostgreSQL o'rnatilmoqda..."
-if ! command -v psql &>/dev/null; then
-  apt-get install -y -qq postgresql postgresql-contrib
-  systemctl enable postgresql --quiet
-  systemctl start postgresql
-  ok "PostgreSQL o'rnatildi"
-else
-  ok "PostgreSQL allaqachon mavjud"
-  systemctl start postgresql 2>/dev/null || true
-fi
-
-# DB foydalanuvchi va baza yaratish
-sudo -u postgres psql -tc "SELECT 1 FROM pg_user WHERE usename='${DB_USER}'" | grep -q 1 || \
-  sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASS}';" >/dev/null
-
-sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || \
-  sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};" >/dev/null
-
-ok "PostgreSQL baza tayyorlandi: $DB_NAME"
-
-# ─────────────────────────────────────────
-#  4. Nginx o'rnatish
-# ─────────────────────────────────────────
-sep
-info "[4/9] Nginx o'rnatilmoqda..."
-if ! command -v nginx &>/dev/null; then
-  apt-get install -y -qq nginx
-  ok "Nginx o'rnatildi"
-else
-  ok "Nginx allaqachon mavjud"
-fi
-
-# ─────────────────────────────────────────
-#  5. Kodni klonlash
-# ─────────────────────────────────────────
-sep
-info "[5/9] Kod GitHub'dan yuklanmoqda..."
-if [ -d "$APP_DIR" ]; then
-  warn "$APP_DIR allaqachon mavjud — yangilanmoqda..."
-  cd "$APP_DIR"
-  git pull origin main --quiet
-else
-  git clone "$REPO_URL" "$APP_DIR" --quiet
-  cd "$APP_DIR"
-fi
-ok "Kod yuklandi: $APP_DIR"
-
-# ─────────────────────────────────────────
-#  6. .env fayl yaratish
-# ─────────────────────────────────────────
-sep
-info "[6/9] .env fayli yaratilmoqda..."
-cat > "$APP_DIR/.env" << EOF
-DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}
+# .env ni yangilash/yaratish
+cat > "$APP_DIR/.env" << ENVEOF
+DATABASE_URL=${DATABASE_URL}
 SESSION_SECRET=${SESSION_SECRET}
 NODE_ENV=production
 PORT=${API_PORT}
-EOF
-ok ".env fayli yaratildi"
+ENVEOF
+ok ".env yangilandi"
 
-# ─────────────────────────────────────────
-#  7. Paketlarni o'rnatish va build
-# ─────────────────────────────────────────
-sep
-info "[7/9] Paketlar o'rnatilmoqda (1-2 daqiqa kutiladi)..."
-cd "$APP_DIR"
-pnpm install --frozen-lockfile --silent
-ok "Paketlar o'rnatildi"
+# ecosystem.config.cjs ni yaratish/yangilash (PM2 env saqlanadi)
+cat > "$ECOSYSTEM" << ECOEOF
+module.exports = {
+  apps: [{
+    name: '${PM2_NAME}',
+    script: 'artifacts/api-server/dist/index.mjs',
+    cwd: '${APP_DIR}',
+    env: {
+      NODE_ENV: 'production',
+      PORT: ${API_PORT},
+      DATABASE_URL: '${DATABASE_URL}',
+      SESSION_SECRET: '${SESSION_SECRET}'
+    },
+    exp_backoff_restart_delay: 100,
+    max_restarts: 10,
+    watch: false
+  }]
+};
+ECOEOF
+ok "ecosystem.config.cjs yangilandi"
 
-info "    Backend build qilinmoqda..."
-pnpm --filter @workspace/api-server run build --silent
-ok "    Backend build tayyor"
+# ── 3. Git pull ───────────────────────────
+info "3/7 GitHub dan so'nggi kod olinmoqda..."
+git fetch origin 2>/dev/null
+git reset --hard origin/main 2>/dev/null
+ok "Kod yangilandi → $(git log --oneline -1)"
 
-info "    Frontend build qilinmoqda..."
-BASE_PATH="/" pnpm --filter @workspace/davomat run build --silent
+# ── 4. Dependencies ───────────────────────
+info "4/7 Paketlar o'rnatilmoqda..."
+pnpm install --frozen-lockfile 2>/dev/null || pnpm install
+ok "Paketlar tayyor"
+
+# ── 5. Build ──────────────────────────────
+info "5/7 Build qilinmoqda..."
+
+info "    API server..."
+DATABASE_URL="$DATABASE_URL" pnpm --filter @workspace/api-server run build
+ok "    API server build tayyor"
+
+info "    Frontend..."
+PORT=3000 BASE_PATH=/ pnpm --filter @workspace/davomat run build
 ok "    Frontend build tayyor"
 
-# ─────────────────────────────────────────
-#  8. Database migratsiyasi va seed
-# ─────────────────────────────────────────
-sep
-info "[8/9] Database jadvallari yaratilmoqda..."
-cd "$APP_DIR/lib/db"
-DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}" \
-  npx drizzle-kit push --config=drizzle.config.ts --force >/dev/null 2>&1
-ok "Database jadvallari tayyor"
-
-# PM2 bilan API server ishga tushirish
-info "    API server vaqtincha ishga tushirilmoqda (seed uchun)..."
-cd "$APP_DIR"
-pm2 delete davomat-api 2>/dev/null || true
-pm2 start artifacts/api-server/dist/index.mjs \
-  --name davomat-api \
-  --env production \
-  --update-env \
-  -- \
-  2>/dev/null
-pm2 set davomat-api:DATABASE_URL "postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}" 2>/dev/null || true
-
-# .env orqali ishga tushirish uchun ecosystem fayli yaratish
-cat > "$APP_DIR/ecosystem.config.cjs" << EOF
-module.exports = {
-  apps: [
-    {
-      name: 'davomat-api',
-      script: 'artifacts/api-server/dist/index.mjs',
-      cwd: '${APP_DIR}',
-      env: {
-        NODE_ENV: 'production',
-        PORT: ${API_PORT},
-        DATABASE_URL: 'postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}',
-        SESSION_SECRET: '${SESSION_SECRET}'
-      },
-      exp_backoff_restart_delay: 100,
-      max_restarts: 10
-    }
-  ]
-};
-EOF
-
-pm2 delete davomat-api 2>/dev/null || true
-pm2 start "$APP_DIR/ecosystem.config.cjs" >/dev/null 2>&1
-
-# Serverning ishga tushishini kutish
-info "    Server tayyor bo'lishini kutilmoqda..."
-for i in $(seq 1 15); do
-  sleep 1
-  if curl -sf "http://localhost:${API_PORT}/api/health" >/dev/null 2>&1; then
-    ok "    API server ishga tushdi"
-    break
-  fi
-  if [ "$i" -eq 15 ]; then
-    warn "    Server 15 soniyada ishlamadi, seed o'tkazib yuborildi. Keyinroq qo'lda: curl -X POST http://localhost:${API_PORT}/api/seed"
-  fi
-done
-
-# Seed qilish
-SEED_RESULT=$(curl -s -X POST "http://localhost:${API_PORT}/api/seed" 2>/dev/null || echo "failed")
-if echo "$SEED_RESULT" | grep -qi "seed\|success\|already"; then
-  ok "    Boshlang'ich ma'lumotlar kiritildi (superadmin/admin)"
-else
-  warn "    Seed natijasi: $SEED_RESULT"
+if [ -d "$WEB_DIR" ]; then
+  cp -r "$APP_DIR/artifacts/davomat/dist/public/." "$WEB_DIR/"
+  ok "    Frontend ko'chirildi → $WEB_DIR"
 fi
 
-pm2 save >/dev/null
-ok "Database tayyorlandi"
+# ── 6. PM2 restart ────────────────────────
+info "6/7 API server ishga tushirilmoqda..."
 
-# ─────────────────────────────────────────
-#  9. Nginx sozlash
-# ─────────────────────────────────────────
-sep
-info "[9/9] Nginx sozlanmoqda..."
+# Avvalgi processni to'xtatish (nom yoki id bo'lishi mumkin)
+pm2 delete "$PM2_NAME" 2>/dev/null || true
+pm2 delete 6 2>/dev/null || true  # Eski id
+sleep 1
 
-if [ -n "$DOMAIN" ]; then
-  SERVER_NAME="$DOMAIN www.$DOMAIN"
-else
-  SERVER_NAME="_"
-fi
+# Ecosystem fayl bilan ishga tushirish
+pm2 start "$ECOSYSTEM"
+pm2 save >/dev/null 2>&1 || true
+ok "PM2 ishga tushdi: $PM2_NAME (port $API_PORT)"
 
-cat > /etc/nginx/sites-available/davomat << EOF
-server {
-    listen 80;
-    server_name ${SERVER_NAME};
+# ── 7. DB tekshirish va seed ──────────────
+info "7/7 Foydalanuvchilar tekshirilmoqda..."
+sleep 3  # API ga tayyorlanish vaqti
 
-    # Frontend statik fayllar
-    root ${APP_DIR}/artifacts/davomat/dist/public;
-    index index.html;
+ADMIN_COUNT=$(psql "$DATABASE_URL" -tAc "SELECT COUNT(*) FROM users WHERE role IN ('admin','superadmin');" 2>/dev/null || echo "0")
+ADMIN_COUNT=$(echo "$ADMIN_COUNT" | tr -d ' ')
 
-    # Barcha sahifalar uchun (SPA)
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-
-    # Backend API
-    location /api/ {
-        proxy_pass http://localhost:${API_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_cache_bypass \$http_upgrade;
-        proxy_read_timeout 90;
-    }
-
-    # Katta fayllar uchun
-    client_max_body_size 10M;
-
-    # Kesh sozlamalari (statik fayllar)
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
-        expires 30d;
-        add_header Cache-Control "public, immutable";
-    }
-}
-EOF
-
-# Eski konfiguratsiyani o'chirish
-rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-ln -sf /etc/nginx/sites-available/davomat /etc/nginx/sites-enabled/davomat
-
-nginx -t >/dev/null 2>&1 && systemctl restart nginx
-ok "Nginx sozlandi"
-
-# ─────────────────────────────────────────
-#  SSL sertifikat (domen bo'lsa)
-# ─────────────────────────────────────────
-if [ -n "$DOMAIN" ]; then
-  sep
-  info "SSL sertifikat o'rnatilmoqda (Let's Encrypt)..."
-  if ! command -v certbot &>/dev/null; then
-    apt-get install -y -qq certbot python3-certbot-nginx
-  fi
-  if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "admin@${DOMAIN}" --redirect >/dev/null 2>&1; then
-    ok "SSL sertifikat o'rnatildi — https://${DOMAIN}"
+if [ "$ADMIN_COUNT" -eq 0 ]; then
+  warn "Admin topilmadi — seed ishga tushirilmoqda..."
+  SEED_RES=$(curl -sf -X POST "http://localhost:$API_PORT/api/seed" 2>/dev/null || echo "")
+  if [ -n "$SEED_RES" ]; then
+    ok "Seed bajarildi"
   else
-    warn "SSL avtomatik o'rnatilmadi. Qo'lda: certbot --nginx -d ${DOMAIN}"
+    warn "Seed API orqali kelmadi — to'g'ridan DB ga yozilmoqda..."
+    HASH=$(node -e "const b=require('bcryptjs'); console.log(b.hashSync('superadmin123',10));" 2>/dev/null || \
+           node -e "import('bcryptjs').then(b=>console.log(b.default.hashSync('superadmin123',10)))" 2>/dev/null || echo "")
+    if [ -n "$HASH" ]; then
+      psql "$DATABASE_URL" -c "INSERT INTO users (username, password, \"firstName\", \"lastName\", role, \"isActive\") VALUES ('superadmin', '$HASH', 'Super', 'Admin', 'superadmin', true) ON CONFLICT (username) DO NOTHING;" 2>/dev/null || true
+      ok "superadmin yaratildi"
+    fi
   fi
 fi
 
-# ─────────────────────────────────────────
-#  PM2 startup (qayta ishlaganda avtomatik)
-# ─────────────────────────────────────────
-pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
-pm2 save >/dev/null 2>&1
-systemctl enable pm2-root >/dev/null 2>&1 || true
+# ── Natija ────────────────────────────────
+echo ""
+echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║   ✓ Muvaffaqiyatli yangilandi!           ║${NC}"
+echo -e "${CYAN}╚══════════════════════════════════════════╝${NC}"
+echo ""
 
-# ─────────────────────────────────────────
-#  Yakuniy xulosа
-# ─────────────────────────────────────────
-sep
-echo ""
-echo -e "${BOLD}${GREEN}  ✔ O'RNATISH MUVAFFAQIYATLI YAKUNLANDI!${NC}"
-echo ""
-echo -e "${BOLD}  Kirish ma'lumotlari:${NC}"
-echo -e "  ${CYAN}Login:${NC}    superadmin"
-echo -e "  ${CYAN}Parol:${NC}    superadmin123"
-echo ""
-if [ -n "$DOMAIN" ]; then
-  echo -e "  ${CYAN}Sayt manzili:${NC}  https://${DOMAIN}"
+# API tekshirish
+if curl -sf "http://localhost:$API_PORT/api/auth/me" >/dev/null 2>&1; then
+  ok "API ishlayapti: http://localhost:$API_PORT"
 else
-  VPS_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
-  echo -e "  ${CYAN}Sayt manzili:${NC}  http://${VPS_IP}"
+  warn "API javob bermadi. Loglar:"
+  pm2 logs "$PM2_NAME" --lines 10 --nostream 2>/dev/null || true
 fi
+
 echo ""
-echo -e "${BOLD}  Foydali buyruqlar:${NC}"
-echo -e "  ${YELLOW}pm2 status${NC}           — server holati"
-echo -e "  ${YELLOW}pm2 logs davomat-api${NC} — server loglari"
-echo -e "  ${YELLOW}pm2 restart davomat-api${NC} — serverni qayta ishga tushirish"
+echo -e "  ${CYAN}Login ma'lumotlari:${NC}"
+psql "$DATABASE_URL" -c "SELECT id, username, role, \"isActive\" FROM users WHERE role IN ('admin','superadmin') ORDER BY id;" 2>/dev/null || true
+
 echo ""
-echo -e "${BOLD}  Yangilanish kerak bo'lsa:${NC}"
-echo -e "  ${YELLOW}cd /opt/davomat-tizimi && git pull && pnpm install && pnpm --filter @workspace/api-server run build && BASE_PATH=/ pnpm --filter @workspace/davomat run build && pm2 restart davomat-api${NC}"
+echo -e "  ${YELLOW}Standart parol:${NC} superadmin123 / admin123"
 echo ""
-sep
+pm2 list
+echo ""
