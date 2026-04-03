@@ -213,8 +213,9 @@ router.get("/range", requireRole("superadmin", "admin"), async (req: AuthRequest
     return;
   }
 
-  const empConditions: any[] = [eq(usersTable.isActive, true)];
-  if (departmentId) empConditions.push(eq(usersTable.departmentId, Number(departmentId)));
+  const empWhere = departmentId
+    ? eq(usersTable.departmentId, Number(departmentId))
+    : undefined;
 
   const employees = await db
     .select({
@@ -227,7 +228,8 @@ router.get("/range", requireRole("superadmin", "admin"), async (req: AuthRequest
     })
     .from(usersTable)
     .leftJoin(departmentsTable, eq(usersTable.departmentId, departmentsTable.id))
-    .where(and(...empConditions));
+    .where(empWhere)
+    .orderBy(usersTable.firstName);
 
   const attConditions: SQL[] = [
     gte(attendanceTable.date, startDate as string),

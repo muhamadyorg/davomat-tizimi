@@ -108,20 +108,30 @@ export default function AttendanceHistory() {
   const [employees, setEmployees] = useState<Emp[]>([]);
   const [records, setRecords] = useState<AttRec[]>([]);
   const [loading, setLoading] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const { start, end, label } = getDateRange(tab, anchor);
   const days = eachDayOfInterval({ start, end });
 
   const load = useCallback(async () => {
     setLoading(true);
+    setApiError(null);
     try {
       const p = new URLSearchParams({ startDate: format(start, "yyyy-MM-dd"), endDate: format(end, "yyyy-MM-dd") });
       if (dept) p.set("departmentId", dept);
       const res = await fetch(`${BASE}/api/attendance/range?${p}`, { credentials: "include" });
-      if (!res.ok) return;
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        setApiError(`Xato ${res.status}: ${errData.message || "Server javob bermadi"}`);
+        setEmployees([]);
+        setRecords([]);
+        return;
+      }
       const data = await res.json();
       setEmployees(Array.isArray(data.employees) ? data.employees : []);
       setRecords(Array.isArray(data.records) ? data.records : []);
+    } catch (e) {
+      setApiError("Tarmoq xatosi — server bilan aloqa yo'q");
     } finally {
       setLoading(false);
     }
@@ -317,7 +327,14 @@ export default function AttendanceHistory() {
             </div>
           ))}
 
-          {filteredEmps.length === 0 && (
+          {apiError && (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-6 text-center">
+              <p className="text-red-500 font-medium text-sm">{apiError}</p>
+              <button onClick={load} className="mt-3 text-xs text-red-400 underline">Qayta urinish</button>
+            </div>
+          )}
+
+          {!apiError && filteredEmps.length === 0 && (
             <div className="bg-card border border-border/50 rounded-2xl p-12 text-center">
               <Info className="w-12 h-12 text-muted-foreground/20 mx-auto mb-3" />
               <p className="text-muted-foreground">Bu davr uchun ma'lumot topilmadi</p>
