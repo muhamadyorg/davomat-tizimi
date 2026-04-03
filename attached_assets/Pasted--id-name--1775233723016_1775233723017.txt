@@ -1,0 +1,22 @@
+┌────┬────────────────────┬──────────┬──────┬───────────┬──────────┬──────────┐
+│ id │ name               │ mode     │ ↺    │ status    │ cpu      │ memory   │
+├────┼────────────────────┼──────────┼──────┼───────────┼──────────┼──────────┤
+│ 9  │ davomat-api        │ fork     │ 2    │ online    │ 0%       │ 16.6mb   │
+│ 5  │ zakaz-api          │ fork     │ 8    │ online    │ 0%       │ 171.8mb  │
+└────┴────────────────────┴──────────┴──────┴───────────┴──────────┴──────────┘
+[TAILING] Tailing last 5 lines for [davomat-api] process (change the value with --lines option)
+/root/.pm2/logs/davomat-api-error.log last 5 lines:
+9|davomat- | designed for a production environment, as it will leak
+9|davomat- | memory, and will not scale past a single process.
+9|davomat- | Warning: connect.session() MemoryStore is not
+9|davomat- | designed for a production environment, as it will leak
+9|davomat- | memory, and will not scale past a single process.
+
+/root/.pm2/logs/davomat-api-out.log last 5 lines:
+9|davomat- | {"level":30,"time":1775233218156,"pid":3104709,"hostname":"ubuntu-8gb-hel1-2","req":{"id":3,"method":"POST","url":"/api/auth/login"},"res":{"statusCode":200},"responseTime":166,"msg":"request completed"}
+9|davomat- | {"level":30,"time":1775233218294,"pid":3104709,"hostname":"ubuntu-8gb-hel1-2","req":{"id":4,"method":"GET","url":"/api/auth/me"},"res":{"statusCode":401},"responseTime":2,"msg":"request completed"}
+9|davomat- | {"level":30,"time":1775233220843,"pid":3104709,"hostname":"ubuntu-8gb-hel1-2","req":{"id":5,"method":"POST","url":"/api/auth/login"},"res":{"statusCode":200},"responseTime":129,"msg":"request completed"}
+9|davomat- | {"level":30,"time":1775233220960,"pid":3104709,"hostname":"ubuntu-8gb-hel1-2","req":{"id":6,"method":"GET","url":"/api/auth/me"},"res":{"statusCode":401},"responseTime":1,"msg":"request completed"}
+9|davomat- | {"level":30,"time":1775233603961,"pid":3105434,"hostname":"ubuntu-8gb-hel1-2","port":3001,"msg":"Server listening"}
+
+root@ubuntu-8gb-hel1-2:/www/server/davomat-tizimi#

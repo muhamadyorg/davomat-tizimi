@@ -71,6 +71,10 @@ router.post("/login", async (req: Request, res: Response) => {
 
   req.session.userId = user.id;
 
+  await new Promise<void>((resolve, reject) => {
+    req.session.save((err) => (err ? reject(err) : resolve()));
+  });
+
   const userInfo = await getUserById(user.id);
   res.json({ user: userInfo, message: "Login successful" });
 });
