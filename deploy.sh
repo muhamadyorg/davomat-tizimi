@@ -188,12 +188,13 @@ echo -e "${GREEN}║   ✓ Muvaffaqiyatli yangilandi!           ║${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════╝${NC}"
 echo ""
 
-# API tekshirish
-if curl -sf "http://localhost:$API_PORT/api/auth/me" >/dev/null 2>&1; then
-  ok "API ishlayapti: http://localhost:$API_PORT"
+# API tekshirish (401 = ishlayapti, faqat login kerak)
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$API_PORT/api/auth/me" 2>/dev/null || echo "000")
+if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "200" ]; then
+  ok "API ishlayapti: http://localhost:$API_PORT (HTTP $HTTP_CODE)"
 else
-  warn "API javob bermadi. Loglar:"
-  pm2 logs "$PM2_NAME" --lines 10 --nostream 2>/dev/null || true
+  warn "API javob bermadi (HTTP $HTTP_CODE). Loglar:"
+  pm2 logs "$PM2_NAME" --lines 15 --nostream 2>/dev/null || true
 fi
 
 echo ""
