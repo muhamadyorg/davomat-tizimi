@@ -1,0 +1,83 @@
+root@ubuntu-8gb-hel1-2:/www/server/davomat-tizimi# cd /www/server/davomat-tizimi
+
+# Duplicate sameSite ni tuzatish
+python3 -c "
+c = open('artifacts/api-server/src/app.ts').read()
+c = c.replace('      sameSite: \"lax\",\n      sameSite: \"lax\",', '      sameSite: \"lax\",')
+open('artifacts/api-server/src/app.ts', 'w').write(c)
+print('OK')
+"
+
+# Tekshirish
+grep -A6 "httpOnly" artifacts/api-server/src/app.ts
+
+# Build va restart
+pnpm --filter @workspace/api-server run build
+pm2 restart davomat-api
+
+sleep 3
+
+# Login sinash
+curl -c /tmp/cook.txt -s -X POST http://localhost:3001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"superadmin","password":"superadmin123"}' | python3 -m json.tool 2>/dev/null || echo "JSON error"
+
+# /me sinash (cookie bilan)
+curl -b /tmp/cook.txt -s http://localhost:3001/api/auth/me | python3 -m json.tool 2>/dev/null || echo "JSON error"
+OK
+      httpOnly: true,
+      sameSite: "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    },
+  }),
+);
+
+
+> @workspace/api-server@0.0.0 build /www/server/davomat-tizimi/artifacts/api-server
+> node ./build.mjs
+
+
+  dist/index.mjs                       2.3mb ⚠️
+  dist/pino-worker.mjs               153.4kb
+  dist/pino-file.mjs                 142.1kb
+  dist/pino-pretty.mjs               114.6kb
+  dist/thread-stream-worker.mjs        7.3kb
+  dist/index.mjs.map                   3.9mb
+  dist/pino-worker.mjs.map           256.9kb
+  dist/pino-file.mjs.map             229.0kb
+  dist/pino-pretty.mjs.map           203.9kb
+  dist/thread-stream-worker.mjs.map   12.0kb
+
+⚡ Done in 272ms
+Use --update-env to update environment variables
+[PM2] Applying action restartProcessId on app [davomat-api](ids: [ 9 ])
+[PM2] [davomat-api](9) ✓
+┌────┬────────────────────┬──────────┬──────┬───────────┬──────────┬──────────┐
+│ id │ name               │ mode     │ ↺    │ status    │ cpu      │ memory   │
+├────┼────────────────────┼──────────┼──────┼───────────┼──────────┼──────────┤
+│ 9  │ davomat-api        │ fork     │ 5    │ online    │ 0%       │ 22.3mb   │
+│ 5  │ zakaz-api          │ fork     │ 8    │ online    │ 0%       │ 172.4mb  │
+└────┴────────────────────┴──────────┴──────┴───────────┴──────────┴──────────┘
+{
+    "user": {
+        "id": 1,
+        "username": "superadmin",
+        "firstName": "Super",
+        "lastName": "Admin",
+        "email": "superadmin@davomat.uz",
+        "phone": "+998901234567",
+        "role": "superadmin",
+        "departmentId": null,
+        "departmentName": null,
+        "shiftId": null,
+        "shiftName": null,
+        "position": "Bosh Administrator",
+        "isActive": true,
+        "createdAt": "2026-04-03T16:05:53.110Z"
+    },
+    "message": "Login successful"
+}
+{
+    "message": "Unauthorized"
+}
+root@ubuntu-8gb-hel1-2:/www/server/davomat-tizimi# 
