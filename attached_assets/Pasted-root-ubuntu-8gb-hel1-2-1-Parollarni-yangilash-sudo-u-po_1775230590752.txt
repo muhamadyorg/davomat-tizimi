@@ -1,0 +1,68 @@
+root@ubuntu-8gb-hel1-2:~# # 1. Parollarni yangilash
+sudo -u postgres psql davomat_db -c "UPDATE users SET password='\$2b\$10\$tFrMplQcNcAxLkBItB0STOKPagTjFjUKSPj0IJdFbbXhYC7Fm7C3m', \"isActive\"=true WHERE username='superadmin';"
+sudo -u postgres psql davomat_db -c "UPDATE users SET password='\$2b\$10\$WYKKDs0gQPk5T/2e/BMEUeAsClfLSjuYgAN5XLTsEg4S7586EhuUu', \"isActive\"=true WHERE username='admin';"
+
+# 2. .env ni davomat_db ga o'rnatish
+cat > /www/server/davomat-tizimi/.env << 'EOF'
+DATABASE_URL=postgresql://davomat@localhost:5432/davomat_db
+SESSION_SECRET=davomat-super-secret-2024
+NODE_ENV=production
+PORT=3001
+EOF
+
+# 3. ecosystem.config.cjs ni yangilash
+cat > /www/server/davomat-tizimi/ecosystem.config.cjs << 'EOF'
+module.exports = {
+  apps: [{
+    name: 'davomat-api',
+    script: 'artifacts/api-server/dist/index.mjs',
+    cwd: '/www/server/davomat-tizimi',
+    env: {
+      NODE_ENV: 'production',
+      PORT: 3001,
+      DATABASE_URL: 'postgresql://davomat@localhost:5432/davomat_db',
+      SESSION_SECRET: 'davomat-super-secret-2024'
+    }
+  }]
+};
+EOF
+
+# 4. PM2 restart
+pm2 delete davomat-api 2>/dev/null || true
+pm2 start /www/server/davomat-tizimi/ecosystem.config.cjs
+pm2 save
+
+# 5. Tekshirish
+N ('admin','superadmin');"mat_db -c "SELECT username, role, \"isActive\" FROM users WHERE role I
+could not change directory to "/root": Permission denied
+ERROR:  column "isActive" of relation "users" does not exist
+LINE 1: ...QcNcAxLkBItB0STOKPagTjFjUKSPj0IJdFbbXhYC7Fm7C3m', "isActive"...
+                                                             ^
+could not change directory to "/root": Permission denied
+ERROR:  column "isActive" of relation "users" does not exist
+LINE 1: ...0gQPk5T/2e/BMEUeAsClfLSjuYgAN5XLTsEg4S7586EhuUu', "isActive"...
+                                                             ^
+[PM2] Applying action deleteProcessId on app [davomat-api](ids: [ 6 ])
+[PM2] [davomat-api](6) ✓
+┌────┬────────────────────┬──────────┬──────┬───────────┬──────────┬──────────┐
+│ id │ name               │ mode     │ ↺    │ status    │ cpu      │ memory   │
+├────┼────────────────────┼──────────┼──────┼───────────┼──────────┼──────────┤
+│ 5  │ zakaz-api          │ fork     │ 8    │ online    │ 0%       │ 172.0mb  │
+└────┴────────────────────┴──────────┴──────┴───────────┴──────────┴──────────┘
+[PM2][WARN] Applications davomat-api not running, starting...
+[PM2] App [davomat-api] launched (1 instances)
+┌────┬────────────────────┬──────────┬──────┬───────────┬──────────┬──────────┐
+│ id │ name               │ mode     │ ↺    │ status    │ cpu      │ memory   │
+├────┼────────────────────┼──────────┼──────┼───────────┼──────────┼──────────┤
+│ 7  │ davomat-api        │ fork     │ 0    │ online    │ 0%       │ 13.7mb   │
+│ 5  │ zakaz-api          │ fork     │ 8    │ online    │ 0%       │ 172.0mb  │
+└────┴────────────────────┴──────────┴──────┴───────────┴──────────┴──────────┘
+[PM2] Saving current process list...
+[PM2] Successfully saved in /root/.pm2/dump.pm2
+API status: 401
+could not change directory to "/root": Permission denied
+ERROR:  column "isActive" does not exist
+LINE 1: SELECT username, role, "isActive" FROM users WHERE role IN (...
+                               ^
+HINT:  Perhaps you meant to reference the column "users.is_active".
+root@ubuntu-8gb-hel1-2:~# 
