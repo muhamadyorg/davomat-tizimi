@@ -1,0 +1,48 @@
+root@ubuntu-8gb-hel1-2:/www/server/davomat-tizimi# cd /www/server/davomat-tizimi
+
+# Barcha adminlarni ko'rish
+node -e "
+import('./artifacts/api-server/dist/index.mjs').catch(()=>{});
+" 2>/dev/null || true
+
+# Parolni yangilash (superadmin123 → yangi hash)
+node --input-type=module << 'EOF'
+import bcrypt from './node_modules/bcryptjs/dist/bcrypt.js';
+import pg from 'pg';
+import fs from 'fs';
+
+const env = fs.readFileSync('.env','utf8').split('\n').reduce((a,l)=>{
+  const [k,...v]=l.split('='); if(k) a[k.trim()]=v.join('=').trim(); return a;
+},{});
+
+const client = new pg.Client({ connectionString: env.DATABASE_URL });
+await client.connect();
+
+// Barcha userlarni ko'rish
+const {rows} = await client.query("SELECT id, username, role, \"isActive\" FROM users ORDER BY id");
+console.log("DB dagi userlar:");
+rows.forEach(r => console.log(` id=${r.id} | ${r.username} | ${r.role} | active=${r.isActive}`));
+
+// superadmin parolini yangilash
+const hash = await bcrypt.hash('superadmin123', 10);
+await client.query("UPDATE users SET password=$1, \"isActive\"=true WHERE username='superadEOFit client.end();n paroli yangilandi → admin123");isActive\"=true WHERE username='admin'"
+node:internal/modules/esm/resolve:283
+    throw new ERR_MODULE_NOT_FOUND(
+          ^
+
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/www/server/davomat-tizimi/node_modules/bcryptjs/dist/bcrypt.js' imported from /www/server/davomat-tizimi/[eval1]
+    at finalizeResolution (node:internal/modules/esm/resolve:283:11)
+    at moduleResolve (node:internal/modules/esm/resolve:952:10)
+    at defaultResolve (node:internal/modules/esm/resolve:1188:11)
+    at ModuleLoader.defaultResolve (node:internal/modules/esm/loader:708:12)
+    at #cachedDefaultResolve (node:internal/modules/esm/loader:657:25)
+    at ModuleLoader.resolve (node:internal/modules/esm/loader:640:38)
+    at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:264:38)
+    at ModuleJob._link (node:internal/modules/esm/module_job:168:49)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5) {
+  code: 'ERR_MODULE_NOT_FOUND',
+  url: 'file:///www/server/davomat-tizimi/node_modules/bcryptjs/dist/bcrypt.js'
+}
+
+Node.js v20.20.1
+root@ubuntu-8gb-hel1-2:/www/server/davomat-tizimi# 
